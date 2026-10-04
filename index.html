@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>AR Experiment Viewer</title>
+  <style>
+    body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
+    #camera-video {
+      position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+      object-fit: cover; z-index: 1;
+    }
+    #canvas-container {
+      position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+      z-index: 2; pointer-events: auto;
+    }
+    #ui-overlay {
+      position: absolute; top: 12px; left: 12px; z-index: 9999;
+      display: flex; gap: 8px; align-items: center;
+    }
+    .btn {
+      padding: 10px 18px; font-size: 14px; font-weight: bold; border-radius: 6px;
+      border: none; cursor: pointer; color: white;
+    }
+    #btn-start { background-color: #007aff; }
+    #btn-stop { background-color: #ff3b30; display: none; }
+    #timer-display {
+      background: rgba(0,0,0,0.7); color: #fff; padding: 8px 12px;
+      border-radius: 6px; font-family: monospace; font-size: 14px;
+    }
+    #log-box {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      font-size: 13px; color: #fff; background: rgba(0, 0, 0, 0.85);
+      padding: 16px 24px; border-radius: 8px; z-index: 9999;
+      max-width: 85%; line-height: 1.6; text-align: left; border: 1px solid #444;
+    }
+  </style>
+  <!-- ライブラリ読み込み -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+</head>
+<body>
+  <video id="camera-video" autoplay playsinline muted></video>
+  <div id="canvas-container"></div>
+  <div id="log-box">Loading 3D Model...</div>
+
+  <div id="ui-overlay">
+    <button id="btn-start" class="btn" onclick="startSession()">START AR</button>
+    <button id="btn-stop" class="btn" onclick="stopSession()">STOP & SAVE</button>
+    <div id="timer-display">00.0s</div>
+  </div>
+
+  <script>
+    var logBox = document.getElementById('log-box');
+    function log(msg) { 
+      if (logBox) logBox.innerHTML += '<br>' + msg; 
+    }
+
+    var logBuffer = [];
+    var isRecording = false;
+    var startTime = 0;
+    var timerInterval = null;
+    var currentOrientation = { alpha: 0, beta: 0, gamma: 0 };
+    var currentMotion = { x: 0, y: 0, z: 0 };
+
+    function handleOrientation(e) {
+      currentOrientation.alpha = e.alpha || 0;
+      currentOrientation.beta = e.beta || 0;
+      currentOrientation.gamma = e.gamma || 0;
+    }
+
+    function handleMotion(e) {
+      if (e.rotationRate) {
+        currentMotion.x = e.rotationRate.beta || 0;
+        currentMotion.y = e.rotationRate.gamma || 0;
+        currentMotion.z = e.rotationRate.alpha || 0;
+      }
+    }
+
+    function sendAllLogs() {
+      if (logBuffer.length === 0) return;
+      if (window.FileMaker) {
+        var payload = JSON.stringify({ logs: logBuffer });
+        FileMaker.PerformScript('Save_SensorLogs', payload);
+      }
+      logBuffer = [];
+    }
+
+    async function startCamera() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+      try {
+        var video = document.getElementById('camera-video');
+        var stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' } },
+          audio: false
+        });
+        video.srcObject = stream;
+        await video.play();
+      } catch (err) {
+        console.log('Camera error:', err);
+      }
+    }
+
+    async function startSession() {
+      await startCamera();
+
+      // iOS Safariのセンサー権限要求
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        try {
+          await DeviceOrientationEvent.requestPermission();
+        } catch(e) {}
+      }
+      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+        try {
+          await DeviceMotionEvent.requestPermission();
+        } catch(e) {}
+      }
+
+      window.addEventListener('deviceorientation', handleOrientation, true);
+      window.addEventListener('devicemotion', handleMotion, true);
+
+      isRecording = true;
+      startTime = performance.now();
+      logBuffer = [];
+
+      document.getElementById('btn-start').style.display = 'none';
+      document.getElementById('btn-stop').style.display = 'inline-block';
+
+      // 0.5秒間隔（500ms）で記録
+      timerInterval = setInterval(function() {
+        if (!isRecording) return;
+        var elapsed = (performance.now() - startTime) / 1000;
+        document.getElementById('timer-display').innerText = elapsed.toFixed(1) + 's';
+
+        logBuffer.push({
+          time: new Date().toISOString(),
+          elapsed: elapsed.toFixed(2),
+          alpha: currentOrientation.alpha.toFixed(2),
+          beta: currentOrientation.beta.toFixed(2),
+          gamma: currentOrientation.gamma.toFixed(2),
+          gyroX: currentMotion.x.toFixed(2),
+          gyroY: currentMotion.y.toFixed(2),
+          gyroZ: currentMotion.z.toFixed(2)
+        });
+      }, 500);
+    }
+
+    function stopSession() {
+      isRecording = false;
+      clearInterval(timerInterval);
+      window.removeEventListener('deviceorientation', handleOrientation);
+      window.removeEventListener('devicemotion', handleMotion);
+
+      sendAllLogs();
+
+      document.getElementById('btn-start').style.display = 'inline-block';
+      document.getElementById('btn-stop').style.display = 'none';
+      alert('計測データを送信しました');
+    }
+
+    // ----------------------------------------------------
+    // Three.js 初期化 & GLB読み込み
+    // ----------------------------------------------------
+    function init() {
+      var container = document.getElementById('canvas-container');
+      var scene = new THREE.Scene();
+
+      var camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+      camera.position.set(0, 1.5, 4.0);
+
+      var renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setClearColor(0x000000, 0);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.outputEncoding = THREE.sRGBEncoding;
+      container.appendChild(renderer.domElement);
+
+      var controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+
+      var ambLight = new THREE.AmbientLight(0xffffff, 1.5);
+      scene.add(ambLight);
+      var dLight = new THREE.DirectionalLight(0xffffff, 1.2);
+      dLight.position.set(5, 10, 7);
+      scene.add(dLight);
+
+      // 同一ディレクトリ内の北海第一号機 model.glb をロード
+      var loader = new THREE.GLTFLoader();
+      loader.load('./model.glb', function(gltf) {
+        logBox.style.display = 'none';
+        var model = gltf.scene;
+        var box = new THREE.Box3().setFromObject(model);
+        var center = box.getCenter(new THREE.Vector3());
+        model.position.sub(center);
+        scene.add(model);
+      }, undefined, function(err) {
+        log('GLB load failed: ' + err.message);
+      });
+
+      function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+      }
+      animate();
+
+      window.addEventListener('resize', function() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+    }
+
+    window.addEventListener('DOMContentLoaded', init);
+  </script>
+</body>
+</html>
