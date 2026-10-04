@@ -35,7 +35,6 @@
       max-width: 85%; line-height: 1.6; text-align: left; border: 1px solid #444;
     }
   </style>
-  <!-- ライブラリ読み込み -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
@@ -72,9 +71,9 @@
 
     function handleMotion(e) {
       if (e.rotationRate) {
-        currentMotion.x = e.rotationRate.beta || 0;
-        currentMotion.y = e.rotationRate.gamma || 0;
-        currentMotion.z = e.rotationRate.alpha || 0;
+        currentMotion.x = e.rotationRate.beta || 0;   // X軸回り (Pitch速度)
+        currentMotion.y = e.rotationRate.gamma || 0;  // Y軸回り (Roll速度)
+        currentMotion.z = e.rotationRate.alpha || 0;  // Z軸回り (Yaw速度)
       }
     }
 
@@ -103,9 +102,7 @@
     }
 
     async function startSession() {
-      await startCamera();
-
-      // iOS Safariのセンサー権限要求
+      // 1. 最優先でiOSのセンサー権限を要求
       if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
         try {
           await DeviceOrientationEvent.requestPermission();
@@ -117,9 +114,14 @@
         } catch(e) {}
       }
 
+      // 2. リスナー登録
       window.addEventListener('deviceorientation', handleOrientation, true);
       window.addEventListener('devicemotion', handleMotion, true);
 
+      // 3. カメラ起動
+      await startCamera();
+
+      // 4. 計測開始
       isRecording = true;
       startTime = performance.now();
       logBuffer = [];
@@ -127,7 +129,6 @@
       document.getElementById('btn-start').style.display = 'none';
       document.getElementById('btn-stop').style.display = 'inline-block';
 
-      // 0.5秒間隔（500ms）で記録
       timerInterval = setInterval(function() {
         if (!isRecording) return;
         var elapsed = (performance.now() - startTime) / 1000;
@@ -143,7 +144,7 @@
           gyroY: currentMotion.y.toFixed(2),
           gyroZ: currentMotion.z.toFixed(2)
         });
-      }, 500);
+      }, 500); // 0.5秒刻み
     }
 
     function stopSession() {
@@ -156,12 +157,8 @@
 
       document.getElementById('btn-start').style.display = 'inline-block';
       document.getElementById('btn-stop').style.display = 'none';
-      alert('計測データを送信しました');
     }
 
-    // ----------------------------------------------------
-    // Three.js 初期化 & GLB読み込み
-    // ----------------------------------------------------
     function init() {
       var container = document.getElementById('canvas-container');
       var scene = new THREE.Scene();
@@ -185,7 +182,6 @@
       dLight.position.set(5, 10, 7);
       scene.add(dLight);
 
-      // 同一ディレクトリ内の北海第一号機 model.glb をロード
       var loader = new THREE.GLTFLoader();
       loader.load('./model.glb', function(gltf) {
         logBox.style.display = 'none';
