@@ -29,10 +29,10 @@
       border-radius: 6px; font-family: monospace; font-size: 14px;
     }
     #log-box {
-      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-      font-size: 13px; color: #fff; background: rgba(0, 0, 0, 0.85);
-      padding: 16px 24px; border-radius: 8px; z-index: 9999;
-      max-width: 85%; line-height: 1.6; text-align: left; border: 1px solid #444;
+      position: absolute; bottom: 20px; left: 12px;
+      font-size: 12px; color: #00ff66; background: rgba(0, 0, 0, 0.75);
+      padding: 10px 14px; border-radius: 6px; z-index: 9999;
+      font-family: monospace; line-height: 1.4; pointer-events: none;
     }
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -42,7 +42,7 @@
 <body>
   <video id="camera-video" autoplay playsinline muted></video>
   <div id="canvas-container"></div>
-  <div id="log-box">Loading 3D Model...</div>
+  <div id="log-box">Status: Ready</div>
 
   <div id="ui-overlay">
     <button id="btn-start" class="btn" onclick="startSession()">START AR</button>
@@ -52,10 +52,6 @@
 
   <script>
     var logBox = document.getElementById('log-box');
-    function log(msg) { 
-      if (logBox) logBox.innerHTML += '<br>' + msg; 
-    }
-
     var logBuffer = [];
     var isRecording = false;
     var startTime = 0;
@@ -64,16 +60,17 @@
     var currentMotion = { x: 0, y: 0, z: 0 };
 
     function handleOrientation(e) {
-      currentOrientation.alpha = e.alpha || 0;
-      currentOrientation.beta = e.beta || 0;
-      currentOrientation.gamma = e.gamma || 0;
+      currentOrientation.alpha = (e.alpha !== null && !isNaN(e.alpha)) ? e.alpha : 0;
+      currentOrientation.beta  = (e.beta  !== null && !isNaN(e.beta))  ? e.beta  : 0;
+      currentOrientation.gamma = (e.gamma !== null && !isNaN(e.gamma)) ? e.gamma : 0;
     }
 
     function handleMotion(e) {
       if (e.rotationRate) {
-        currentMotion.x = e.rotationRate.beta || 0;   // X軸回り (Pitch速度)
-        currentMotion.y = e.rotationRate.gamma || 0;  // Y軸回り (Roll速度)
-        currentMotion.z = e.rotationRate.alpha || 0;  // Z軸回り (Yaw速度)
+        // iOS WebKit: beta=X軸, gamma=Y軸, alpha=Z軸
+        currentMotion.x = (e.rotationRate.beta  !== null && !isNaN(e.rotationRate.beta))  ? e.rotationRate.beta  : 0;
+        currentMotion.y = (e.rotationRate.gamma !== null && !isNaN(e.rotationRate.gamma)) ? e.rotationRate.gamma : 0;
+        currentMotion.z = (e.rotationRate.alpha !== null && !isNaN(e.rotationRate.alpha)) ? e.rotationRate.alpha : 0;
       }
     }
 
@@ -102,26 +99,26 @@
     }
 
     async function startSession() {
-      // 1. 最優先でiOSのセンサー権限を要求
-      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-        try {
-          await DeviceOrientationEvent.requestPermission();
-        } catch(e) {}
-      }
+      // 1. 最優先でiOSの権限ダイアログを要求（ユーザー操作の直後である必要があります）
       if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
         try {
           await DeviceMotionEvent.requestPermission();
         } catch(e) {}
       }
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        try {
+          await DeviceOrientationEvent.requestPermission();
+        } catch(e) {}
+      }
 
-      // 2. リスナー登録
+      // 2. センサーリスナーを登録
       window.addEventListener('deviceorientation', handleOrientation, true);
       window.addEventListener('devicemotion', handleMotion, true);
 
-      // 3. カメラ起動
+      // 3. カメラ映像の開始
       await startCamera();
 
-      // 4. 計測開始
+      // 4. バッファ初期化とタイマー開始
       isRecording = true;
       startTime = performance.now();
       logBuffer = [];
@@ -134,15 +131,25 @@
         var elapsed = (performance.now() - startTime) / 1000;
         document.getElementById('timer-display').innerText = elapsed.toFixed(1) + 's';
 
+        // 画面左下にリアルタイム数値を表示（動作確認用）
+        if (logBox) {
+          logBox.innerHTML = 
+            'Time: ' + elapsed.toFixed(1) + 's<br>' +
+            'Roll/Pitch: ' + currentOrientation.gamma.toFixed(1) + ' / ' + currentOrientation.beta.toFixed(1) + '<br>' +
+            'Gyro X: ' + currentMotion.x.toFixed(2) + '<br>' +
+            'Gyro Y: ' + currentMotion.y.toFixed(2) + '<br>' +
+            'Gyro Z: ' + currentMotion.z.toFixed(2);
+        }
+
         logBuffer.push({
           time: new Date().toISOString(),
-          elapsed: elapsed.toFixed(2),
-          alpha: currentOrientation.alpha.toFixed(2),
-          beta: currentOrientation.beta.toFixed(2),
-          gamma: currentOrientation.gamma.toFixed(2),
-          gyroX: currentMotion.x.toFixed(2),
-          gyroY: currentMotion.y.toFixed(2),
-          gyroZ: currentMotion.z.toFixed(2)
+          elapsed: Number(elapsed.toFixed(2)),
+          alpha: Number(currentOrientation.alpha.toFixed(2)),
+          beta: Number(currentOrientation.beta.toFixed(2)),
+          gamma: Number(currentOrientation.gamma.toFixed(2)),
+          gyroX: Number(currentMotion.x.toFixed(2)),
+          gyroY: Number(currentMotion.y.toFixed(2)),
+          gyroZ: Number(currentMotion.z.toFixed(2))
         });
       }, 500); // 0.5秒刻み
     }
@@ -157,6 +164,9 @@
 
       document.getElementById('btn-start').style.display = 'inline-block';
       document.getElementById('btn-stop').style.display = 'none';
+      if (logBox) {
+        logBox.innerHTML = 'Status: Data Saved to FileMaker';
+      }
     }
 
     function init() {
@@ -184,14 +194,13 @@
 
       var loader = new THREE.GLTFLoader();
       loader.load('./model.glb', function(gltf) {
-        logBox.style.display = 'none';
         var model = gltf.scene;
         var box = new THREE.Box3().setFromObject(model);
         var center = box.getCenter(new THREE.Vector3());
         model.position.sub(center);
         scene.add(model);
       }, undefined, function(err) {
-        log('GLB load failed: ' + err.message);
+        if (logBox) logBox.innerHTML = 'GLB load error';
       });
 
       function animate() {
