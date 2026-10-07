@@ -12,7 +12,7 @@
     }
     #canvas-container {
       position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
-      z-index: 2; /* タップイベントを受け取るため pointer-events は auto (デフォルト) */
+      z-index: 2;
     }
     #ui-overlay {
       position: absolute; top: 12px; left: 12px; z-index: 9999;
@@ -34,7 +34,6 @@
       padding: 10px 14px; border-radius: 6px; z-index: 9999;
       font-family: monospace; line-height: 1.4; pointer-events: none;
     }
-    /* ズーム時に表示される「全体に戻る」ボタン */
     #btn-reset-view {
       position: absolute; bottom: 30px; left: 50%;
       transform: translateX(-50%);
@@ -72,7 +71,6 @@
     var currentMotion = { x: 0, y: 0, z: 0 };
     var camera, scene, renderer;
 
-    // --- 空間座標・ズーム遷移用ステート ---
     var defaultRadius = 30.0;
     var targetCenter = new THREE.Vector3(0, 0, 0);
     var targetCenterGoal = new THREE.Vector3(0, 0, 0);
@@ -83,12 +81,72 @@
     var baseHeading = null;
     var baseBeta = null;
 
-    // Raycaster（3Dタップ検出用）
     var raycaster = new THREE.Raycaster();
     var touchPos = new THREE.Vector2();
-    var clickableObjects = [];
+    var clickablePanels = [];
 
-    // カメラの回り込み計算（非フォーカス時のみ実行）
+    // --- ターゲットハイライト枠（マーカー） ---
+    var highlightMarker = null;
+
+    // パネルと対象パーツ座標の紐付け定義
+    // ※パネルのX座標（正負）で左パネルか右パネルかを自動判定
+    var partTargets = {
+      left: {
+        name: '複葉機（主翼）',
+        pos: new THREE.Vector3(0.0, 1.2, 0.0),    // 主翼の中央高め
+        size: [8.5, 1.2, 2.5],                   // 翼を覆う幅広の枠
+        dist: 11.0
+      },
+      right: {
+        name: '翼間支柱',
+        pos: new THREE.Vector3(3.2, 0.4, 0.0),   // 右側の支柱群の位置
+        size: [1.8, 1.8, 1.8],                   // 支柱を囲む立方体枠
+        dist: 7.0
+      }
+    };
+
+    function createHighlightMarker() {
+      var group = new THREE.Group();
+
+      // 半透明のネオンシアン色のボックス
+      var geom = new THREE.BoxGeometry(1, 1, 1);
+      var mat = new THREE.MeshBasicMaterial({
+        color: 0x00e5ff,
+        transparent: true,
+        opacity: 0.25,
+        depthWrite: false
+      });
+      var box = new THREE.Mesh(geom, mat);
+      group.add(box);
+
+      // ワイヤーフレームの輪郭線
+      var edges = new THREE.EdgesGeometry(geom);
+      var lineMat = new THREE.LineBasicMaterial({
+        color: 0x00ffff,
+        linewidth: 2,
+        transparent: true,
+        opacity: 0.8
+      });
+      var wire = new THREE.LineSegments(edges, lineMat);
+      group.add(wire);
+
+      group.visible = false;
+      scene.add(group);
+      return group;
+    }
+
+    function showMarker(targetDef) {
+      if (!highlightMarker) return;
+      highlightMarker.position.copy(targetDef.pos);
+      highlightMarker.scale.set(targetDef.size[0], targetDef.size[1], targetDef.size[2]);
+      highlightMarker.visible = true;
+    }
+
+    function hideMarker() {
+      if (highlightMarker) highlightMarker.visible = false;
+    }
+
+    // カメラの回り込み追従
     function updateCameraOrbit() {
       if (!camera || !isRecording || isFocusMode) return;
 
@@ -117,7 +175,7 @@
       camera.lookAt(targetCenter);
     }
 
-    // 滑らかなズーム補間処理
+    // スムーズな遷移補間
     function updateTransition() {
       targetCenter.lerp(targetCenterGoal, 0.08);
       radius += (radiusGoal - radius) * 0.08;
@@ -125,20 +183,26 @@
       if (isFocusMode) {
         camera.lookAt(targetCenter);
       }
+
+      // マーカーをふんわり点滅させるアニメーション
+      if (highlightMarker && highlightMarker.visible) {
+        var pulse = (Math.sin(performance.now() * 0.005) + 1) * 0.5; // 0.0〜1.0
+        highlightMarker.children[0].material.opacity = 0.15 + pulse * 0.25;
+      }
     }
 
-    // 全体表示へ復帰
     function resetToOverview() {
       isFocusMode = false;
       targetCenterGoal.set(0, 0, 0);
       radiusGoal = defaultRadius;
+      hideMarker();
       document.getElementById('btn-reset-view').style.display = 'none';
       if (logBox) logBox.innerHTML = 'Mode: Orbit Overview';
     }
 
-    // 画面タップ時のRaycaster判定
+    // パネルタップ判定
     function onCanvasTouch(e) {
-      if (!renderer || clickableObjects.length === 0) return;
+      if (!renderer || clickablePanels.length === 0) return;
 
       var clientX = e.clientX || (e.touches && e.touches[0] ? e.touches[0].clientX : null);
       var clientY = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : null);
@@ -148,22 +212,26 @@
       touchPos.y = -(clientY / window.innerHeight) * 2 + 1;
 
       raycaster.setFromCamera(touchPos, camera);
-      var intersects = raycaster.intersectObjects(clickableObjects, true);
+      var intersects = raycaster.intersectObjects(clickablePanels, true);
 
       if (intersects.length > 0) {
         var hit = intersects[0].object;
-        
-        // タップされたオブジェクト（パネル等）のワールド座標を取得
         var hitWorldPos = new THREE.Vector3();
         hit.getWorldPosition(hitWorldPos);
 
-        // ズームイン設定（対象部位へ接近：距離8.0m）
+        // パネルが左右どちらにあるかで対象部位を割り当て
+        var targetDef = (hitWorldPos.x < 0) ? partTargets.left : partTargets.right;
+
+        // 1. 該当部位に光るターゲットマーカーを表示
+        showMarker(targetDef);
+
+        // 2. カメラをその部位へズームイン
         isFocusMode = true;
-        targetCenterGoal.copy(hitWorldPos);
-        radiusGoal = 8.0;
+        targetCenterGoal.copy(targetDef.pos);
+        radiusGoal = targetDef.dist;
 
         document.getElementById('btn-reset-view').style.display = 'block';
-        if (logBox) logBox.innerHTML = 'Focus on: ' + (hit.name || 'Panel');
+        if (logBox) logBox.innerHTML = 'Focus on: ' + targetDef.name;
       }
     }
 
@@ -274,6 +342,7 @@
       document.getElementById('btn-start').style.display = 'inline-block';
       document.getElementById('btn-stop').style.display = 'none';
       document.getElementById('btn-reset-view').style.display = 'none';
+      hideMarker();
       if (logBox) {
         logBox.innerHTML = 'Status: Data Saved to FileMaker';
       }
@@ -299,14 +368,17 @@
       dLight.position.set(15, 30, 20);
       scene.add(dLight);
 
+      // マーカーを生成してシーンに準備
+      highlightMarker = createHighlightMarker();
+
       var loader = new THREE.GLTFLoader();
       loader.load('./model.glb', function(gltf) {
         var model = gltf.scene;
 
-        // モデル内の全メッシュを走査し、タップ判定対象として登録
+        // 全メッシュをタップ判定対象に登録
         model.traverse(function(child) {
           if (child.isMesh) {
-            clickableObjects.push(child);
+            clickablePanels.push(child);
           }
         });
 
@@ -334,11 +406,8 @@
         renderer.setSize(window.innerWidth, window.innerHeight);
       });
 
-      // イベントリスナー登録
       document.getElementById('btn-start').addEventListener('click', onStartClicked);
       document.getElementById('btn-stop').addEventListener('click', onStopClicked);
-
-      // パネル（3Dオブジェクト）タップ検知
       renderer.domElement.addEventListener('pointerup', onCanvasTouch);
     }
 
