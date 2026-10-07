@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>AR Orbit Viewer</title>
+  <style>
+    body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
+    #camera-video {
+      position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+      object-fit: cover; z-index: 1; pointer-events: none;
+    }
+    #canvas-container {
+      position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+      z-index: 2; /* タップイベントを受け取るため pointer-events は auto (デフォルト) */
+    }
+    #ui-overlay {
+      position: absolute; top: 12px; left: 12px; z-index: 9999;
+      display: flex; gap: 8px; align-items: center;
+    }
+    .btn {
+      padding: 10px 18px; font-size: 14px; font-weight: bold; border-radius: 6px;
+      border: none; cursor: pointer; color: white;
+    }
+    #btn-start { background-color: #007aff; }
+    #btn-stop { background-color: #ff3b30; display: none; }
+    #timer-display {
+      background: rgba(0,0,0,0.7); color: #fff; padding: 8px 12px;
+      border-radius: 6px; font-family: monospace; font-size: 14px;
+    }
+    #log-box {
+      position: absolute; bottom: 20px; left: 12px;
+      font-size: 12px; color: #00ff66; background: rgba(0, 0, 0, 0.75);
+      padding: 10px 14px; border-radius: 6px; z-index: 9999;
+      font-family: monospace; line-height: 1.4; pointer-events: none;
+    }
+    /* ズーム時に表示される「全体に戻る」ボタン */
+    #btn-reset-view {
+      position: absolute; bottom: 30px; left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 122, 255, 0.9); color: white;
+      padding: 12px 24px; font-size: 15px; font-weight: bold;
+      border: none; border-radius: 24px; display: none;
+      z-index: 9999; cursor: pointer;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+</head>
+<body>
+  <video id="camera-video" autoplay playsinline webkit-playsinline muted></video>
+  <div id="canvas-container"></div>
+  <div id="log-box">Status: Ready</div>
+
+  <div id="ui-overlay">
+    <button id="btn-start" class="btn">START AR</button>
+    <button id="btn-stop" class="btn" style="display:none;">STOP & SAVE</button>
+    <div id="timer-display">00.0s</div>
+  </div>
+
+  <button id="btn-reset-view" onclick="resetToOverview()">全体表示に戻る</button>
+
+  <script>
+    var logBox = document.getElementById('log-box');
+    var logBuffer = [];
+    var isRecording = false;
+    var startTime = 0;
+    var timerInterval = null;
+
+    var currentOrientation = { alpha: 0, beta: 0, gamma: 0 };
+    var currentMotion = { x: 0, y: 0, z: 0 };
+    var camera, scene, renderer;
+
+    // --- 空間座標・ズーム遷移用ステート ---
+    var defaultRadius = 30.0;
+    var targetCenter = new THREE.Vector3(0, 0, 0);
+    var targetCenterGoal = new THREE.Vector3(0, 0, 0);
+    var radius = defaultRadius;
+    var radiusGoal = defaultRadius;
+    var isFocusMode = false;
+
+    var baseHeading = null;
+    var baseBeta = null;
+
+    // Raycaster（3Dタップ検出用）
+    var raycaster = new THREE.Raycaster();
+    var touchPos = new THREE.Vector2();
+    var clickableObjects = [];
+
+    // カメラの回り込み計算（非フォーカス時のみ実行）
+    function updateCameraOrbit() {
+      if (!camera || !isRecording || isFocusMode) return;
+
+      var heading = currentOrientation.alpha;
+      var beta    = currentOrientation.beta;
+
+      if (baseHeading === null && heading !== null && !isNaN(heading)) {
+        baseHeading = heading;
+      }
+      if (baseBeta === null && beta !== null && !isNaN(beta)) {
+        baseBeta = beta;
+      }
+
+      var deltaHeading = heading - (baseHeading || 0);
+      var deltaBeta    = beta - (baseBeta || 0);
+
+      var theta = THREE.MathUtils.degToRad(-deltaHeading);
+      var phiAngle = 90 + deltaBeta;
+      phiAngle = THREE.MathUtils.clamp(phiAngle, 15, 165);
+      var phi = THREE.MathUtils.degToRad(phiAngle);
+
+      camera.position.x = targetCenter.x + radius * Math.sin(phi) * Math.sin(theta);
+      camera.position.y = targetCenter.y + radius * Math.cos(phi);
+      camera.position.z = targetCenter.z + radius * Math.sin(phi) * Math.cos(theta);
+
+      camera.lookAt(targetCenter);
+    }
+
+    // 滑らかなズーム補間処理
+    function updateTransition() {
+      targetCenter.lerp(targetCenterGoal, 0.08);
+      radius += (radiusGoal - radius) * 0.08;
+
+      if (isFocusMode) {
+        camera.lookAt(targetCenter);
+      }
+    }
+
+    // 全体表示へ復帰
+    function resetToOverview() {
+      isFocusMode = false;
+      targetCenterGoal.set(0, 0, 0);
+      radiusGoal = defaultRadius;
+      document.getElementById('btn-reset-view').style.display = 'none';
+      if (logBox) logBox.innerHTML = 'Mode: Orbit Overview';
+    }
+
+    // 画面タップ時のRaycaster判定
+    function onCanvasTouch(e) {
+      if (!renderer || clickableObjects.length === 0) return;
+
+      var clientX = e.clientX || (e.touches && e.touches[0] ? e.touches[0].clientX : null);
+      var clientY = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : null);
+      if (clientX === null || clientY === null) return;
+
+      touchPos.x = (clientX / window.innerWidth) * 2 - 1;
+      touchPos.y = -(clientY / window.innerHeight) * 2 + 1;
+
+      raycaster.setFromCamera(touchPos, camera);
+      var intersects = raycaster.intersectObjects(clickableObjects, true);
+
+      if (intersects.length > 0) {
+        var hit = intersects[0].object;
+        
+        // タップされたオブジェクト（パネル等）のワールド座標を取得
+        var hitWorldPos = new THREE.Vector3();
+        hit.getWorldPosition(hitWorldPos);
+
+        // ズームイン設定（対象部位へ接近：距離8.0m）
+        isFocusMode = true;
+        targetCenterGoal.copy(hitWorldPos);
+        radiusGoal = 8.0;
+
+        document.getElementById('btn-reset-view').style.display = 'block';
+        if (logBox) logBox.innerHTML = 'Focus on: ' + (hit.name || 'Panel');
+      }
+    }
+
+    function handleOrientation(e) {
+      var alphaVal = 0;
+      if (typeof e.webkitCompassHeading !== 'undefined' && e.webkitCompassHeading !== null) {
+        alphaVal = e.webkitCompassHeading;
+      } else if (e.alpha !== null && !isNaN(e.alpha)) {
+        alphaVal = e.alpha;
+      }
+
+      currentOrientation.alpha = alphaVal;
+      currentOrientation.beta  = (e.beta  !== null && !isNaN(e.beta))  ? e.beta  : 0;
+      currentOrientation.gamma = (e.gamma !== null && !isNaN(e.gamma)) ? e.gamma : 0;
+    }
+
+    function handleMotion(e) {
+      if (e.rotationRate) {
+        currentMotion.x = (e.rotationRate.beta  !== null && !isNaN(e.rotationRate.beta))  ? e.rotationRate.beta  : 0;
+        currentMotion.y = (e.rotationRate.gamma !== null && !isNaN(e.rotationRate.gamma)) ? e.rotationRate.gamma : 0;
+        currentMotion.z = (e.rotationRate.alpha !== null && !isNaN(e.rotationRate.alpha)) ? e.rotationRate.alpha : 0;
+      }
+    }
+
+    function sendAllLogs() {
+      if (logBuffer.length === 0) return;
+      if (window.FileMaker) {
+        var payload = JSON.stringify({ logs: logBuffer });
+        FileMaker.PerformScript('Save_SensorLogs', payload);
+      }
+      logBuffer = [];
+    }
+
+    function startCameraDirectly() {
+      var video = document.getElementById('camera-video');
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+
+      navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false
+      }).then(function(stream) {
+        video.srcObject = stream;
+        video.play();
+        if (logBox) logBox.innerHTML = 'Camera Running';
+      }).catch(function(err) {
+        if (logBox) logBox.innerHTML = 'Cam Err: ' + err.name;
+      });
+    }
+
+    async function onStartClicked() {
+      startCameraDirectly();
+
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        try { await DeviceOrientationEvent.requestPermission(); } catch(e) {}
+      }
+      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+        try { await DeviceMotionEvent.requestPermission(); } catch(e) {}
+      }
+
+      baseHeading = null;
+      baseBeta = null;
+
+      window.addEventListener('deviceorientation', handleOrientation, true);
+      window.addEventListener('devicemotion', handleMotion, true);
+
+      isRecording = true;
+      startTime = performance.now();
+      logBuffer = [];
+
+      document.getElementById('btn-start').style.display = 'none';
+      document.getElementById('btn-stop').style.display = 'inline-block';
+
+      timerInterval = setInterval(function() {
+        if (!isRecording) return;
+        var elapsed = (performance.now() - startTime) / 1000;
+        document.getElementById('timer-display').innerText = elapsed.toFixed(1) + 's';
+
+        if (logBox && !isFocusMode) {
+          logBox.innerHTML = 
+            'Time: ' + elapsed.toFixed(1) + 's<br>' +
+            'Heading: ' + currentOrientation.alpha.toFixed(1) + '<br>' +
+            'Beta: ' + currentOrientation.beta.toFixed(1) + '<br>' +
+            'Gyro X: ' + currentMotion.x.toFixed(2) + '<br>' +
+            'Gyro Z: ' + currentMotion.z.toFixed(2);
+        }
+
+        logBuffer.push({
+          time: new Date().toISOString(),
+          elapsed: Number(elapsed.toFixed(2)),
+          alpha: Number(currentOrientation.alpha.toFixed(2)),
+          beta: Number(currentOrientation.beta.toFixed(2)),
+          gamma: Number(currentOrientation.gamma.toFixed(2)),
+          gyroX: Number(currentMotion.x.toFixed(2)),
+          gyroY: Number(currentMotion.y.toFixed(2)),
+          gyroZ: Number(currentMotion.z.toFixed(2))
+        });
+      }, 500);
+    }
+
+    function onStopClicked() {
+      isRecording = false;
+      clearInterval(timerInterval);
+      window.removeEventListener('deviceorientation', handleOrientation);
+      window.removeEventListener('devicemotion', handleMotion);
+
+      sendAllLogs();
+
+      document.getElementById('btn-start').style.display = 'inline-block';
+      document.getElementById('btn-stop').style.display = 'none';
+      document.getElementById('btn-reset-view').style.display = 'none';
+      if (logBox) {
+        logBox.innerHTML = 'Status: Data Saved to FileMaker';
+      }
+    }
+
+    function init() {
+      var container = document.getElementById('canvas-container');
+      scene = new THREE.Scene();
+
+      camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.5, 2000);
+      camera.position.set(0, 0, radius);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setClearColor(0x000000, 0);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.outputEncoding = THREE.sRGBEncoding;
+      container.appendChild(renderer.domElement);
+
+      var ambLight = new THREE.AmbientLight(0xffffff, 1.8);
+      scene.add(ambLight);
+      var dLight = new THREE.DirectionalLight(0xffffff, 1.4);
+      dLight.position.set(15, 30, 20);
+      scene.add(dLight);
+
+      var loader = new THREE.GLTFLoader();
+      loader.load('./model.glb', function(gltf) {
+        var model = gltf.scene;
+
+        // モデル内の全メッシュを走査し、タップ判定対象として登録
+        model.traverse(function(child) {
+          if (child.isMesh) {
+            clickableObjects.push(child);
+          }
+        });
+
+        var box = new THREE.Box3().setFromObject(model);
+        var center = box.getCenter(new THREE.Vector3());
+        model.position.sub(center);
+
+        scene.add(model);
+        camera.lookAt(targetCenter);
+      }, undefined, function(err) {
+        if (logBox) logBox.innerHTML = 'GLB load error';
+      });
+
+      function animate() {
+        requestAnimationFrame(animate);
+        updateTransition();
+        updateCameraOrbit();
+        renderer.render(scene, camera);
+      }
+      animate();
+
+      window.addEventListener('resize', function() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+      // イベントリスナー登録
+      document.getElementById('btn-start').addEventListener('click', onStartClicked);
+      document.getElementById('btn-stop').addEventListener('click', onStopClicked);
+
+      // パネル（3Dオブジェクト）タップ検知
+      renderer.domElement.addEventListener('pointerup', onCanvasTouch);
+    }
+
+    window.addEventListener('DOMContentLoaded', init);
+  </script>
+</body>
+</html>
