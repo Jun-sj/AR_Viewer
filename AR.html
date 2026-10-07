@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>AR Experiment - DeviceOrientation</title>
+  <title>AR Orbit Viewer</title>
   <style>
     body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
     #camera-video {
@@ -12,7 +12,7 @@
     }
     #canvas-container {
       position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
-      z-index: 2; pointer-events: none; /* 指操作は無効化し、端末姿勢に追従 */
+      z-index: 2; pointer-events: none;
     }
     #ui-overlay {
       position: absolute; top: 12px; left: 12px; z-index: 9999;
@@ -59,33 +59,43 @@
     var currentOrientation = { alpha: 0, beta: 0, gamma: 0 };
     var currentMotion = { x: 0, y: 0, z: 0 };
     var camera, scene, renderer;
-    var initialAlpha = null; // 開始時の方角オフセット
+    var targetCenter = new THREE.Vector3(0, 0, 0); // 機体の中心点
+    var radius = 2.5; // 機体との観察距離（メートル）
+    var initialAlpha = null;
 
-    // iOSの姿勢角（Alpha/Beta/Gamma）をThree.jsのカメラ回転に反映
-    function updateCameraRotation() {
+    // iPadの向きに合わせて、カメラが機体の周囲を「公転（回り込み）」する計算
+    function updateCameraOrbit() {
       if (!camera) return;
 
-      var alpha = currentOrientation.alpha ? THREE.MathUtils.degToRad(currentOrientation.alpha) : 0; // Z
-      var beta  = currentOrientation.beta  ? THREE.MathUtils.degToRad(currentOrientation.beta)  : 0; // X
-      var gamma = currentOrientation.gamma ? THREE.MathUtils.degToRad(currentOrientation.gamma) : 0; // Y
+      var alpha = currentOrientation.alpha || 0; // 水平方角（0〜360）
+      var beta  = currentOrientation.beta  || 0; // 前後傾き（-180〜180）
 
-      // 開始時の正面方向をリセット（最初の向きを正面とする）
-      if (initialAlpha === null && currentOrientation.alpha !== 0) {
+      // STARTを押したときの向きを基準（正面）にする
+      if (initialAlpha === null && alpha !== 0) {
         initialAlpha = alpha;
       }
-      var adjustedAlpha = alpha - (initialAlpha || 0);
+      var relAlpha = (alpha - (initialAlpha || 0));
 
-      var euler = new THREE.Euler();
-      // iOS DeviceOrientation -> Three.js 座標系変換 (Z-X-Y順)
-      euler.set(beta, adjustedAlpha, -gamma, 'YXZ');
-      camera.quaternion.setFromEuler(euler);
+      // 角度をラジアンに変換
+      var theta = THREE.MathUtils.degToRad(relAlpha);  // 水平回り込み角
+      // 上下の見下ろし角（iPadを立てた約60〜70度付近を標準とし、制限をかける）
+      var phiAngle = THREE.MathUtils.clamp(90 - (beta - 45), 15, 165);
+      var phi = THREE.MathUtils.degToRad(phiAngle);
+
+      // 球面座標系（公転）からカメラの位置 (X, Y, Z) を計算
+      camera.position.x = targetCenter.x + radius * Math.sin(phi) * Math.sin(theta);
+      camera.position.y = targetCenter.y + radius * Math.cos(phi);
+      camera.position.z = targetCenter.z + radius * Math.sin(phi) * Math.cos(theta);
+
+      // 常に機体の中心を見つめ続ける
+      camera.lookAt(targetCenter);
     }
 
     function handleOrientation(e) {
       currentOrientation.alpha = (e.alpha !== null && !isNaN(e.alpha)) ? e.alpha : 0;
       currentOrientation.beta  = (e.beta  !== null && !isNaN(e.beta))  ? e.beta  : 0;
       currentOrientation.gamma = (e.gamma !== null && !isNaN(e.gamma)) ? e.gamma : 0;
-      updateCameraRotation();
+      updateCameraOrbit();
     }
 
     function handleMotion(e) {
@@ -121,7 +131,6 @@
     }
 
     async function startSession() {
-      // 1. センサー権限リクエスト
       if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
         try { await DeviceMotionEvent.requestPermission(); } catch(e) {}
       }
@@ -129,16 +138,13 @@
         try { await DeviceOrientationEvent.requestPermission(); } catch(e) {}
       }
 
-      initialAlpha = null; // 開始時の正面方向をリセット
+      initialAlpha = null; // 正面基準リセット
 
-      // 2. イベント登録
       window.addEventListener('deviceorientation', handleOrientation, true);
       window.addEventListener('devicemotion', handleMotion, true);
 
-      // 3. カメラ開始
       await startCamera();
 
-      // 4. タイマー・ログ開始
       isRecording = true;
       startTime = performance.now();
       logBuffer = [];
@@ -154,7 +160,7 @@
         if (logBox) {
           logBox.innerHTML = 
             'Time: ' + elapsed.toFixed(1) + 's<br>' +
-            'Roll/Pitch: ' + currentOrientation.gamma.toFixed(1) + ' / ' + currentOrientation.beta.toFixed(1) + '<br>' +
+            'Alpha: ' + currentOrientation.alpha.toFixed(1) + '<br>' +
             'Gyro X: ' + currentMotion.x.toFixed(2) + '<br>' +
             'Gyro Y: ' + currentMotion.y.toFixed(2) + '<br>' +
             'Gyro Z: ' + currentMotion.z.toFixed(2);
@@ -192,9 +198,8 @@
       var container = document.getElementById('canvas-container');
       scene = new THREE.Scene();
 
-      // カメラを原点(0, 0, 0)に配置
-      camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
-      camera.position.set(0, 0, 0);
+      camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+      camera.position.set(0, 0.5, radius);
 
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
       renderer.setClearColor(0x000000, 0);
@@ -203,20 +208,19 @@
       renderer.outputEncoding = THREE.sRGBEncoding;
       container.appendChild(renderer.domElement);
 
-      var ambLight = new THREE.AmbientLight(0xffffff, 1.5);
+      var ambLight = new THREE.AmbientLight(0xffffff, 1.6);
       scene.add(ambLight);
       var dLight = new THREE.DirectionalLight(0xffffff, 1.2);
       dLight.position.set(5, 10, 7);
       scene.add(dLight);
 
-      // モデルをカメラの正面（Z = -2.5m の位置）に配置
+      // モデルを原点 (0, 0, 0) にセンタリング配置
       var loader = new THREE.GLTFLoader();
       loader.load('./model.glb', function(gltf) {
         var model = gltf.scene;
         var box = new THREE.Box3().setFromObject(model);
         var center = box.getCenter(new THREE.Vector3());
-        model.position.sub(center); // 原点中心合わせ
-        model.position.set(0, 0, -2.5); // 正面2.5m先に固定
+        model.position.sub(center);
         scene.add(model);
       }, undefined, function(err) {
         if (logBox) logBox.innerHTML = 'GLB load error';
