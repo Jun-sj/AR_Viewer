@@ -44,8 +44,8 @@
   <div id="log-box">Status: Ready</div>
 
   <div id="ui-overlay">
-    <button id="btn-start" class="btn" onclick="startSession()">START AR</button>
-    <button id="btn-stop" class="btn" onclick="stopSession()">STOP & SAVE</button>
+    <button id="btn-start" class="btn">START AR</button>
+    <button id="btn-stop" class="btn" style="display:none;">STOP & SAVE</button>
     <div id="timer-display">00.0s</div>
   </div>
 
@@ -61,26 +61,35 @@
     var camera, scene, renderer;
     var targetCenter = new THREE.Vector3(0, 0, 0);
 
-    // ★カメラの観察距離（モデルを縮小しないため、実寸全体が見渡せる25メートルに設定）
-    var radius = 30.0; 
-    var initialAlpha = null;
+    var radius = 30.0;
+    var baseHeading = null;
+    var baseBeta = null;
 
+    // カメラ位置を端末の向きに合わせて機体の周囲に配置
     function updateCameraOrbit() {
-      if (!camera) return;
+      if (!camera || !isRecording) return;
 
-      var alpha = currentOrientation.alpha || 0;
-      var beta  = currentOrientation.beta  || 0;
+      var heading = currentOrientation.alpha; // 方位角
+      var beta    = currentOrientation.beta;  // 前後傾き
 
-      if (initialAlpha === null && alpha !== 0) {
-        initialAlpha = alpha;
+      if (baseHeading === null && heading !== null && !isNaN(heading)) {
+        baseHeading = heading;
       }
-      var relAlpha = alpha - (initialAlpha || 0);
+      if (baseBeta === null && beta !== null && !isNaN(beta)) {
+        baseBeta = beta;
+      }
 
-      var theta = THREE.MathUtils.degToRad(relAlpha);
-      var phiAngle = THREE.MathUtils.clamp(90 - (beta - 45), 15, 165);
+      var deltaHeading = (heading - (baseHeading || 0));
+      var deltaBeta    = (beta - (baseBeta || 0));
+
+      // iPadを持って右に回ったら、カメラも機体の右側へ公転
+      var theta = THREE.MathUtils.degToRad(-deltaHeading);
+
+      // 上下見下ろし（基準90度からiPadの傾き変化分を反映）
+      var phiAngle = 90 - deltaBeta;
+      phiAngle = THREE.MathUtils.clamp(phiAngle, 30, 150);
       var phi = THREE.MathUtils.degToRad(phiAngle);
 
-      // 実寸モデルの周囲を公転
       camera.position.x = targetCenter.x + radius * Math.sin(phi) * Math.sin(theta);
       camera.position.y = targetCenter.y + radius * Math.cos(phi);
       camera.position.z = targetCenter.z + radius * Math.sin(phi) * Math.cos(theta);
@@ -89,10 +98,17 @@
     }
 
     function handleOrientation(e) {
-      currentOrientation.alpha = (e.alpha !== null && !isNaN(e.alpha)) ? e.alpha : 0;
+      // iOS では webkitCompassHeading がコンパス方位として正確に取れる場合がある
+      var alphaVal = 0;
+      if (typeof e.webkitCompassHeading !== 'undefined' && e.webkitCompassHeading !== null) {
+        alphaVal = e.webkitCompassHeading;
+      } else if (e.alpha !== null && !isNaN(e.alpha)) {
+        alphaVal = e.alpha;
+      }
+
+      currentOrientation.alpha = alphaVal;
       currentOrientation.beta  = (e.beta  !== null && !isNaN(e.beta))  ? e.beta  : 0;
       currentOrientation.gamma = (e.gamma !== null && !isNaN(e.gamma)) ? e.gamma : 0;
-      updateCameraOrbit();
     }
 
     function handleMotion(e) {
@@ -112,35 +128,43 @@
       logBuffer = [];
     }
 
-    async function startCamera() {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        if (logBox) logBox.innerHTML = 'Camera API not supported';
-        return;
-      }
-      try {
-        var video = document.getElementById('camera-video');
-        var stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' } },
-          audio: false
-        });
+    function startCameraDirectly() {
+      var video = document.getElementById('camera-video');
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+
+      navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false
+      }).then(function(stream) {
         video.srcObject = stream;
-        await video.play();
-      } catch (err) {
-        if (logBox) logBox.innerHTML = 'Camera Err: ' + err.name + ' - ' + err.message;
-      }
+        video.play();
+      }).catch(function(err) {
+        if (logBox) logBox.innerHTML = 'Cam Err: ' + err.name;
+      });
     }
 
-    async function startSession() {
-      await startCamera();
+    async function onStartClicked() {
+      // 1. 直ちにカメラ起動
+      startCameraDirectly();
 
+      // 2. iOS センサー権限を同期的に許可取得
       if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-        try { await DeviceOrientationEvent.requestPermission(); } catch(e) {}
+        try {
+          var oriPerm = await DeviceOrientationEvent.requestPermission();
+          if (oriPerm !== 'granted') {
+            if (logBox) logBox.innerHTML = 'Orientation permission denied';
+          }
+        } catch(e) {}
       }
       if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-        try { await DeviceMotionEvent.requestPermission(); } catch(e) {}
+        try {
+          await DeviceMotionEvent.requestPermission();
+        } catch(e) {}
       }
 
-      initialAlpha = null;
+      // 3. 基準角度リセット
+      baseHeading = null;
+      baseBeta = null;
 
       window.addEventListener('deviceorientation', handleOrientation, true);
       window.addEventListener('devicemotion', handleMotion, true);
@@ -160,9 +184,9 @@
         if (logBox) {
           logBox.innerHTML = 
             'Time: ' + elapsed.toFixed(1) + 's<br>' +
-            'Alpha: ' + currentOrientation.alpha.toFixed(1) + '<br>' +
+            'Heading: ' + currentOrientation.alpha.toFixed(1) + '<br>' +
+            'Beta: ' + currentOrientation.beta.toFixed(1) + '<br>' +
             'Gyro X: ' + currentMotion.x.toFixed(2) + '<br>' +
-            'Gyro Y: ' + currentMotion.y.toFixed(2) + '<br>' +
             'Gyro Z: ' + currentMotion.z.toFixed(2);
         }
 
@@ -179,7 +203,7 @@
       }, 500);
     }
 
-    function stopSession() {
+    function onStopClicked() {
       isRecording = false;
       clearInterval(timerInterval);
       window.removeEventListener('deviceorientation', handleOrientation);
@@ -198,9 +222,8 @@
       var container = document.getElementById('canvas-container');
       scene = new THREE.Scene();
 
-      // ★カメラの視野角と遠方描画クリッピング（far: 2000）を広げ、大きなモデルも欠けずに映す
       camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.5, 2000);
-      camera.position.set(0, 3.0, radius);
+      camera.position.set(0, 0, radius);
 
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
       renderer.setClearColor(0x000000, 0);
@@ -215,25 +238,23 @@
       dLight.position.set(15, 30, 20);
       scene.add(dLight);
 
-      // モデルの拡大縮小（scale）は一切変更せず、幾何学的中心だけを原点(0,0,0)に揃える
       var loader = new THREE.GLTFLoader();
       loader.load('./model.glb', function(gltf) {
         var model = gltf.scene;
-
         var box = new THREE.Box3().setFromObject(model);
         var center = box.getCenter(new THREE.Vector3());
         
-        // 中心合わせ（スケールは1.0倍の等身大のまま維持）
         model.position.sub(center);
-
         scene.add(model);
         camera.lookAt(targetCenter);
       }, undefined, function(err) {
         if (logBox) logBox.innerHTML = 'GLB load error';
       });
 
+      // 毎フレーム updateCameraOrbit を呼んでスムーズに連動させる
       function animate() {
         requestAnimationFrame(animate);
+        updateCameraOrbit();
         renderer.render(scene, camera);
       }
       animate();
@@ -243,6 +264,9 @@
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
       });
+
+      document.getElementById('btn-start').addEventListener('click', onStartClicked);
+      document.getElementById('btn-stop').addEventListener('click', onStopClicked);
     }
 
     window.addEventListener('DOMContentLoaded', init);
