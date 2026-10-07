@@ -61,8 +61,8 @@
     var camera, scene, renderer;
     var targetCenter = new THREE.Vector3(0, 0, 0);
 
-    // 機体との距離を22メートルに設定
-    var radius = 22.0; 
+    // 機体との距離を20メートルに設定
+    var radius = 20.0; 
     var initialAlpha = null;
 
     function updateCameraOrbit() {
@@ -197,7 +197,7 @@
       var container = document.getElementById('canvas-container');
       scene = new THREE.Scene();
 
-      // カメラの視野角と初期位置（高さ3.0m、手前22.0m）
+      // カメラの視野角と初期位置（高さ3.0m、手前20.0m）
       camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.5, 2000);
       camera.position.set(0, 3.0, radius);
 
@@ -214,7 +214,7 @@
       dLight.position.set(15, 30, 20);
       scene.add(dLight);
 
-      // モデルのスケールは無加工のまま、中心のみ原点にセンタリング
+      // モデルのスケールは原寸のまま、中心のみ原点にセンタリング
       var loader = new THREE.GLTFLoader();
       loader.load('./model.glb', function(gltf) {
         var model = gltf.scene;
