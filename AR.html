@@ -8,7 +8,7 @@
     body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
     #camera-video {
       position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
-      object-fit: cover; z-index: 1;
+      object-fit: cover; z-index: 1; pointer-events: none;
     }
     #canvas-container {
       position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
@@ -39,7 +39,7 @@
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 </head>
 <body>
-  <video id="camera-video" autoplay playsinline muted></video>
+  <video id="camera-video" autoplay playsinline webkit-playsinline muted></video>
   <div id="canvas-container"></div>
   <div id="log-box">Status: Ready</div>
 
@@ -59,35 +59,29 @@
     var currentOrientation = { alpha: 0, beta: 0, gamma: 0 };
     var currentMotion = { x: 0, y: 0, z: 0 };
     var camera, scene, renderer;
-    var targetCenter = new THREE.Vector3(0, 0, 0); // 機体の中心点
-    var radius = 2.5; // 機体との観察距離（メートル）
+    var targetCenter = new THREE.Vector3(0, 0, 0);
+    var radius = 2.5; // モデルとの距離
     var initialAlpha = null;
 
-    // iPadの向きに合わせて、カメラが機体の周囲を「公転（回り込み）」する計算
     function updateCameraOrbit() {
       if (!camera) return;
 
-      var alpha = currentOrientation.alpha || 0; // 水平方角（0〜360）
-      var beta  = currentOrientation.beta  || 0; // 前後傾き（-180〜180）
+      var alpha = currentOrientation.alpha || 0;
+      var beta  = currentOrientation.beta  || 0;
 
-      // STARTを押したときの向きを基準（正面）にする
       if (initialAlpha === null && alpha !== 0) {
         initialAlpha = alpha;
       }
-      var relAlpha = (alpha - (initialAlpha || 0));
+      var relAlpha = alpha - (initialAlpha || 0);
 
-      // 角度をラジアンに変換
-      var theta = THREE.MathUtils.degToRad(relAlpha);  // 水平回り込み角
-      // 上下の見下ろし角（iPadを立てた約60〜70度付近を標準とし、制限をかける）
+      var theta = THREE.MathUtils.degToRad(relAlpha);
       var phiAngle = THREE.MathUtils.clamp(90 - (beta - 45), 15, 165);
       var phi = THREE.MathUtils.degToRad(phiAngle);
 
-      // 球面座標系（公転）からカメラの位置 (X, Y, Z) を計算
       camera.position.x = targetCenter.x + radius * Math.sin(phi) * Math.sin(theta);
       camera.position.y = targetCenter.y + radius * Math.cos(phi);
       camera.position.z = targetCenter.z + radius * Math.sin(phi) * Math.cos(theta);
 
-      // 常に機体の中心を見つめ続ける
       camera.lookAt(targetCenter);
     }
 
@@ -116,7 +110,10 @@
     }
 
     async function startCamera() {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        if (logBox) logBox.innerHTML = 'Camera API not supported';
+        return;
+      }
       try {
         var video = document.getElementById('camera-video');
         var stream = await navigator.mediaDevices.getUserMedia({
@@ -126,25 +123,29 @@
         video.srcObject = stream;
         await video.play();
       } catch (err) {
-        console.log('Camera error:', err);
+        if (logBox) logBox.innerHTML = 'Camera Err: ' + err.name + ' - ' + err.message;
       }
     }
 
     async function startSession() {
-      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-        try { await DeviceMotionEvent.requestPermission(); } catch(e) {}
-      }
+      // 1. 【最優先】ユーザーのタップ直後にカメラを即座に起動（WebKitのセキュリティブロック回避）
+      await startCamera();
+
+      // 2. その後、モーション権限を要求
       if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
         try { await DeviceOrientationEvent.requestPermission(); } catch(e) {}
       }
+      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+        try { await DeviceMotionEvent.requestPermission(); } catch(e) {}
+      }
 
-      initialAlpha = null; // 正面基準リセット
+      initialAlpha = null;
 
+      // 3. リスナー登録
       window.addEventListener('deviceorientation', handleOrientation, true);
       window.addEventListener('devicemotion', handleMotion, true);
 
-      await startCamera();
-
+      // 4. タイマー・ログ開始
       isRecording = true;
       startTime = performance.now();
       logBuffer = [];
@@ -202,7 +203,7 @@
       camera.position.set(0, 0.5, radius);
 
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-      renderer.setClearColor(0x000000, 0);
+      renderer.setClearColor(0x000000, 0); // 背景を完全透過にして背面カメラ映像を透過表示
       renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.setPixelRatio(window.devicePixelRatio);
       renderer.outputEncoding = THREE.sRGBEncoding;
@@ -214,7 +215,6 @@
       dLight.position.set(5, 10, 7);
       scene.add(dLight);
 
-      // モデルを原点 (0, 0, 0) にセンタリング配置
       var loader = new THREE.GLTFLoader();
       loader.load('./model.glb', function(gltf) {
         var model = gltf.scene;
