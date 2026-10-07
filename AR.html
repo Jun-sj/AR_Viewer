@@ -61,7 +61,7 @@
     var camera, scene, renderer;
     var targetCenter = new THREE.Vector3(0, 0, 0);
 
-    // 機体との距離を24.5メートルに設定
+    // 機体との距離を25メートルに設定
     var radius = 25.0; 
     var initialAlpha = null;
 
@@ -197,7 +197,7 @@
       var container = document.getElementById('canvas-container');
       scene = new THREE.Scene();
 
-      // 初期カメラ位置（高さ3.0m、手前24.5m）
+      // 初期カメラ位置（高さ3.0m、手前25.0m）
       camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.5, 2000);
       camera.position.set(0, 3.0, radius);
 
