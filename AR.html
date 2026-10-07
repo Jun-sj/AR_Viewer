@@ -60,7 +60,7 @@
     var currentMotion = { x: 0, y: 0, z: 0 };
     var camera, scene, renderer;
     var targetCenter = new THREE.Vector3(0, 0, 0);
-    var radius = 2.5; // モデルとの距離
+    var radius = 8.0; // 正面手前 8メートル
     var initialAlpha = null;
 
     function updateCameraOrbit() {
@@ -128,10 +128,10 @@
     }
 
     async function startSession() {
-      // 1. 【最優先】ユーザーのタップ直後にカメラを即座に起動（WebKitのセキュリティブロック回避）
+      // 1. タップ直後に最優先でカメラ起動
       await startCamera();
 
-      // 2. その後、モーション権限を要求
+      // 2. モーション権限リクエスト
       if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
         try { await DeviceOrientationEvent.requestPermission(); } catch(e) {}
       }
@@ -199,11 +199,12 @@
       var container = document.getElementById('canvas-container');
       scene = new THREE.Scene();
 
+      // 初期カメラ位置（手前8メートル）
       camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
       camera.position.set(0, 0.5, radius);
 
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-      renderer.setClearColor(0x000000, 0); // 背景を完全透過にして背面カメラ映像を透過表示
+      renderer.setClearColor(0x000000, 0);
       renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.setPixelRatio(window.devicePixelRatio);
       renderer.outputEncoding = THREE.sRGBEncoding;
@@ -215,12 +216,27 @@
       dLight.position.set(5, 10, 7);
       scene.add(dLight);
 
+      // モデルの自動スケーリングと原点センタリング
       var loader = new THREE.GLTFLoader();
       loader.load('./model.glb', function(gltf) {
         var model = gltf.scene;
+
         var box = new THREE.Box3().setFromObject(model);
+        var size = box.getSize(new THREE.Vector3());
+        var maxDim = Math.max(size.x, size.y, size.z);
+
+        // 8m離れた位置から適正なサイズ（長辺 約4.0m）に自動縮小
+        var targetSize = 4.0;
+        if (maxDim > 0) {
+          var scale = targetSize / maxDim;
+          model.scale.set(scale, scale, scale);
+        }
+
+        // スケール適用後の幾何学的中心を原点 (0, 0, 0) にセンタリング
+        box.setFromObject(model);
         var center = box.getCenter(new THREE.Vector3());
         model.position.sub(center);
+
         scene.add(model);
       }, undefined, function(err) {
         if (logBox) logBox.innerHTML = 'GLB load error';
