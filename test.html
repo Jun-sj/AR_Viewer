@@ -88,26 +88,25 @@
     // --- ターゲットハイライト枠（マーカー） ---
     var highlightMarker = null;
 
-    // パネルと対象パーツ座標の紐付け定義（接近距離を3.5〜5.0mまで縮めました）
+    // パネルと対象パーツ座標の紐付け（ズーム距離を18.0mに統一設定）
     var partTargets = {
       left: {
         name: '複葉機（主翼）',
-        pos: new THREE.Vector3(0.0, 1.2, 0.0),    // 主翼の中央高め
-        size: [8.5, 1.2, 2.5],                   // 翼を覆う幅広の枠
-        dist: 5.0                                // 接近距離5m
+        pos: new THREE.Vector3(0.0, 1.2, 0.0),
+        size: [8.5, 1.2, 2.5],
+        dist: 18.0 // 距離を18mに設定
       },
       right: {
         name: '翼間支柱',
-        pos: new THREE.Vector3(3.2, 0.4, 0.0),   // 右側の支柱群の位置
-        size: [1.8, 1.8, 1.8],                   // 支柱を囲む立方体枠
-        dist: 3.5                                // 接近距離3.5m（超アップ）
+        pos: new THREE.Vector3(3.2, 0.4, 0.0),
+        size: [1.8, 1.8, 1.8],
+        dist: 18.0 // 距離を18mに設定
       }
     };
 
     function createHighlightMarker() {
       var group = new THREE.Group();
 
-      // 半透明のネオンシアン色のボックス
       var geom = new THREE.BoxGeometry(1, 1, 1);
       var mat = new THREE.MeshBasicMaterial({
         color: 0x00e5ff,
@@ -118,7 +117,6 @@
       var box = new THREE.Mesh(geom, mat);
       group.add(box);
 
-      // ワイヤーフレームの輪郭線
       var edges = new THREE.EdgesGeometry(geom);
       var lineMat = new THREE.LineBasicMaterial({
         color: 0x00ffff,
@@ -156,7 +154,7 @@
         baseHeading = heading;
       }
       if (baseBeta === null && beta !== null && !isNaN(beta)) {
-        baseBeta = beta;
+        baseBeta = baseBeta !== null ? baseBeta : beta;
       }
 
       var deltaHeading = heading - (baseHeading || 0);
@@ -183,9 +181,8 @@
         camera.lookAt(targetCenter);
       }
 
-      // マーカーをふんわり点滅させるアニメーション
       if (highlightMarker && highlightMarker.visible) {
-        var pulse = (Math.sin(performance.now() * 0.005) + 1) * 0.5; // 0.0〜1.0
+        var pulse = (Math.sin(performance.now() * 0.005) + 1) * 0.5;
         highlightMarker.children[0].material.opacity = 0.15 + pulse * 0.25;
       }
     }
@@ -196,7 +193,7 @@
       radiusGoal = defaultRadius;
       hideMarker();
       document.getElementById('btn-reset-view').style.display = 'none';
-      if (logBox) logBox.innerHTML = 'Mode: Orbit Overview';
+      if (logBox) logBox.innerHTML = 'Mode: Orbit Overview (30m)';
     }
 
     // パネルタップ判定
@@ -218,19 +215,18 @@
         var hitWorldPos = new THREE.Vector3();
         hit.getWorldPosition(hitWorldPos);
 
-        // パネルが左右どちらにあるかで対象部位を割り当て
         var targetDef = (hitWorldPos.x < 0) ? partTargets.left : partTargets.right;
 
-        // 1. 該当部位に光るターゲットマーカーを表示
         showMarker(targetDef);
 
-        // 2. カメラをその部位へズームイン (3.5m〜5.0mへ距離を劇的に短縮)
         isFocusMode = true;
         targetCenterGoal.copy(targetDef.pos);
-        radiusGoal = targetDef.dist;
+        radiusGoal = 18.0; // ズーム時のカメラ距離を 18m に指定
 
         document.getElementById('btn-reset-view').style.display = 'block';
-        if (logBox) logBox.innerHTML = 'Focus on: ' + targetDef.name;
+        if (logBox) {
+          logBox.innerHTML = 'Focus on: ' + targetDef.name + '<br>Dist: 18.0m';
+        }
       }
     }
 
@@ -367,14 +363,12 @@
       dLight.position.set(15, 30, 20);
       scene.add(dLight);
 
-      // マーカーを生成してシーンに準備
       highlightMarker = createHighlightMarker();
 
       var loader = new THREE.GLTFLoader();
       loader.load('./model.glb', function(gltf) {
         var model = gltf.scene;
 
-        // 全メッシュをタップ判定対象に登録
         model.traverse(function(child) {
           if (child.isMesh) {
             clickablePanels.push(child);
