@@ -88,20 +88,19 @@
     // --- ターゲットハイライト枠（マーカー） ---
     var highlightMarker = null;
 
-    // パネルと対象パーツ座標の紐付け定義
-    // ※パネルのX座標（正負）で左パネルか右パネルかを自動判定
+    // パネルと対象パーツ座標の紐付け定義（接近距離を3.5〜5.0mまで縮めました）
     var partTargets = {
       left: {
         name: '複葉機（主翼）',
         pos: new THREE.Vector3(0.0, 1.2, 0.0),    // 主翼の中央高め
         size: [8.5, 1.2, 2.5],                   // 翼を覆う幅広の枠
-        dist: 11.0
+        dist: 5.0                                // 接近距離5m
       },
       right: {
         name: '翼間支柱',
         pos: new THREE.Vector3(3.2, 0.4, 0.0),   // 右側の支柱群の位置
         size: [1.8, 1.8, 1.8],                   // 支柱を囲む立方体枠
-        dist: 7.0
+        dist: 3.5                                // 接近距離3.5m（超アップ）
       }
     };
 
@@ -225,7 +224,7 @@
         // 1. 該当部位に光るターゲットマーカーを表示
         showMarker(targetDef);
 
-        // 2. カメラをその部位へズームイン
+        // 2. カメラをその部位へズームイン (3.5m〜5.0mへ距離を劇的に短縮)
         isFocusMode = true;
         targetCenterGoal.copy(targetDef.pos);
         radiusGoal = targetDef.dist;
