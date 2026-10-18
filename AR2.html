@@ -237,7 +237,7 @@
       scene.add(dLight);
 
       var loader = new THREE.GLTFLoader();
-      loader.load('./model.glb', function(gltf) {
+      loader.load('./model1.glb', function(gltf) {
         var model = gltf.scene;
         var box = new THREE.Box3().setFromObject(model);
         var center = box.getCenter(new THREE.Vector3());
