@@ -177,4 +177,96 @@
       timerInterval = setInterval(function() {
         if (!isRecording) return;
         var elapsed = (performance.now() - startTime) / 1000;
-        document
+        document.getElementById('timer-display').innerText = elapsed.toFixed(1) + 's';
+
+        if (logBox) {
+          logBox.innerHTML = 
+            'Time: ' + elapsed.toFixed(1) + 's<br>' +
+            'Heading: ' + currentOrientation.alpha.toFixed(1) + '<br>' +
+            'Beta: ' + currentOrientation.beta.toFixed(1) + '<br>' +
+            'Gyro X: ' + currentMotion.x.toFixed(2) + '<br>' +
+            'Gyro Z: ' + currentMotion.z.toFixed(2);
+        }
+
+        logBuffer.push({
+          time: new Date().toISOString(),
+          elapsed: Number(elapsed.toFixed(2)),
+          alpha: Number(currentOrientation.alpha.toFixed(2)),
+          beta: Number(currentOrientation.beta.toFixed(2)),
+          gamma: Number(currentOrientation.gamma.toFixed(2)),
+          gyroX: Number(currentMotion.x.toFixed(2)),
+          gyroY: Number(currentMotion.y.toFixed(2)),
+          gyroZ: Number(currentMotion.z.toFixed(2))
+        });
+      }, 500);
+    }
+
+    function onStopClicked() {
+      isRecording = false;
+      clearInterval(timerInterval);
+      window.removeEventListener('deviceorientation', handleOrientation);
+      window.removeEventListener('devicemotion', handleMotion);
+
+      sendAllLogs();
+
+      document.getElementById('btn-start').style.display = 'inline-block';
+      document.getElementById('btn-stop').style.display = 'none';
+      if (logBox) {
+        logBox.innerHTML = 'Status: Data Saved to FileMaker';
+      }
+    }
+
+    function init() {
+      var container = document.getElementById('canvas-container');
+      scene = new THREE.Scene();
+
+      camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.5, 2000);
+      camera.position.set(0, 0, radius);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setClearColor(0x000000, 0);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.outputEncoding = THREE.sRGBEncoding;
+      container.appendChild(renderer.domElement);
+
+      var ambLight = new THREE.AmbientLight(0xffffff, 1.8);
+      scene.add(ambLight);
+      var dLight = new THREE.DirectionalLight(0xffffff, 1.4);
+      dLight.position.set(15, 30, 20);
+      scene.add(dLight);
+
+      var loader = new THREE.GLTFLoader();
+      loader.load('./model2.glb', function(gltf) {
+        var model = gltf.scene;
+        var box = new THREE.Box3().setFromObject(model);
+        var center = box.getCenter(new THREE.Vector3());
+        
+        model.position.sub(center);
+        scene.add(model);
+        camera.lookAt(targetCenter);
+      }, undefined, function(err) {
+        if (logBox) logBox.innerHTML = 'GLB load error';
+      });
+
+      function animate() {
+        requestAnimationFrame(animate);
+        updateCameraOrbit();
+        renderer.render(scene, camera);
+      }
+      animate();
+
+      window.addEventListener('resize', function() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+      document.getElementById('btn-start').addEventListener('click', onStartClicked);
+      document.getElementById('btn-stop').addEventListener('click', onStopClicked);
+    }
+
+    window.addEventListener('DOMContentLoaded', init);
+  </script>
+</body>
+</html>
