@@ -59,6 +59,14 @@
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+  
+  <!-- ▼ ポストプロセス（輪郭線描画用）のスクリプト群を追加 -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/OutlinePass.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
 </head>
 <body>
   <video id="camera-video" autoplay playsinline webkit-playsinline muted></video>
@@ -71,14 +79,12 @@
     <div id="timer-display">00.0s</div>
   </div>
 
-  <!-- 翼間支柱用（3D空間内のパネルをタップ） -->
   <div id="card-wing-strut" class="info-card">
     <div class="card-header" style="background:#e0f2fe; color:#0369a1;">[翼間支柱]</div>
     <p>上下の主翼をつなぐ木製の柱です。飛行中のしなりを防ぎます。</p>
     <div class="action-tip">👉 3Dパネルをタップしてズーム</div>
   </div>
 
-  <!-- プロペラ用（HTMLパネルをタップ） -->
   <div id="card-propeller" class="info-card">
     <div class="card-header" style="background:#fef3c7; color:#d97706;">[プロペラ]</div>
     <p>エンジンの駆動力を推力に変えるための回転翼です。</p>
@@ -95,17 +101,17 @@
     var currentOrientation = { alpha: 0, beta: 0, gamma: 0 };
     var currentMotion = { x: 0, y: 0, z: 0 };
     var camera, scene, renderer;
+    var composer, outlinePass; // ポストプロセス用変数
     
     var targetCenter = new THREE.Vector3(0, 0, 0);
     var defaultTargetCenter = new THREE.Vector3(0, 0, 0);
     var radius = 30.0;
     var defaultRadius = 30.0;
     
-    var currentBoxHelper = null;
     var activeTargetMesh = null;
     var wingStrutMesh = null;
-    var propellerMesh = null; // GLB内のプロペラメッシュ
-    var panelMesh = null;     // 翼間支柱の3Dパネル
+    var propellerMesh = null;
+    var panelMesh = null;
 
     var raycaster = new THREE.Raycaster();
     var mouse = new THREE.Vector2();
@@ -257,6 +263,22 @@
       renderer.outputEncoding = THREE.sRGBEncoding;
       container.appendChild(renderer.domElement);
 
+      // ▼ OutlinePass（輪郭線エフェクト）の初期設定
+      composer = new THREE.EffectComposer(renderer);
+      var renderPass = new THREE.RenderPass(scene, camera);
+      composer.addPass(renderPass);
+
+      outlinePass = new THREE.OutlinePass(
+        new THREE.Vector2(window.innerWidth, window.innerHeight),
+        scene,
+        camera
+      );
+      outlinePass.edgeStrength = 4.0;  // 線の強さ
+      outlinePass.edgeGlow = 0.4;      // 輝き
+      outlinePass.visibleEdgeColor.set(0x00ff00); // 線の色（緑）
+      outlinePass.hiddenEdgeColor.set(0x00ff00);  // 隠れた部分の色
+      composer.addPass(outlinePass);
+
       var ambLight = new THREE.AmbientLight(0xffffff, 1.8);
       scene.add(ambLight);
       var dLight = new THREE.DirectionalLight(0xffffff, 1.4);
@@ -280,7 +302,6 @@
           camera.position.set(0, 0, radius);
         }
 
-        // GLB内から各パーツおよびパネルを探索して取得[cite: 2, 4]
         model.traverse(function(child) {
           if (child.isMesh) {
             var cName = child.name.toLowerCase();
@@ -288,7 +309,7 @@
               wingStrutMesh = child;
             }
             if (cName === "propeller" || cName.includes("propeller")) {
-              propellerMesh = child; // プロペラメッシュを取得
+              propellerMesh = child;
             }
             if (child.name === "翼間支柱" || child.name.includes("翼間支柱")) {
               panelMesh = child;
@@ -305,10 +326,11 @@
         if (logBox) logBox.innerHTML = 'GLB load error';
       });
 
+      // ▼ アニメーションループ（rendererの代わりにcomposerで描画）
       function animate() {
         requestAnimationFrame(animate);
         updateCameraOrbit();
-        renderer.render(scene, camera);
+        composer.render();
       }
       animate();
 
@@ -316,45 +338,35 @@
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
+        composer.setSize(window.innerWidth, window.innerHeight);
       });
 
       document.getElementById('btn-start').addEventListener('click', onStartClicked);
       document.getElementById('btn-stop').addEventListener('click', onStopClicked);
 
-      // ▼ 1. プロペラ用HTMLパネルをタップしたときの処理（GLB内の propeller メッシュを枠で囲んでズーム）
+      // ▼ 1. プロペラ用HTMLパネルをタップしたときの処理（OutlinePassで形状に沿った輪郭線を表示）
       document.getElementById('card-propeller').addEventListener('click', function() {
         if (activeTargetMesh === propellerMesh) {
-          if (currentBoxHelper) {
-            scene.remove(currentBoxHelper);
-            currentBoxHelper = null;
-          }
+          outlinePass.selectedObjects = []; // 選択解除
           targetCenter.copy(defaultTargetCenter);
           radius = defaultRadius;
           activeTargetMesh = null;
           this.style.border = 'none';
           document.getElementById('prop-action').innerText = '👉 このパネルをタップしてズーム';
         } else {
-          if (currentBoxHelper) {
-            scene.remove(currentBoxHelper);
-          }
-          
           if (propellerMesh) {
-            // プロペラを緑色の枠で囲む
-            currentBoxHelper = new THREE.BoxHelper(propellerMesh, 0x00ff00);
-            scene.add(currentBoxHelper);
+            outlinePass.selectedObjects = [propellerMesh]; // プロペラの形に沿った輪郭線を指定
 
             var propBox = new THREE.Box3().setFromObject(propellerMesh);
             var propCenter = propBox.getCenter(new THREE.Vector3());
             var propSize = propBox.getSize(new THREE.Vector3()).length();
 
             targetCenter.copy(propCenter);
-            radius = propSize * 1.5; // ズーム倍率
+            radius = propSize * 1.5;
             activeTargetMesh = propellerMesh;
 
             this.style.border = '2px solid #d97706';
             document.getElementById('prop-action').innerText = '🔍 拡大表示中（タップで戻る）';
-          } else {
-            if (logBox) logBox.innerHTML = 'Status Error: propeller mesh not found';
           }
         }
       });
@@ -374,19 +386,12 @@
 
           if (panelMesh && (clickedObj === panelMesh || isChildOf(clickedObj, panelMesh))) {
             if (activeTargetMesh === wingStrutMesh) {
-              if (currentBoxHelper) {
-                scene.remove(currentBoxHelper);
-                currentBoxHelper = null;
-              }
+              outlinePass.selectedObjects = [];
               targetCenter.copy(defaultTargetCenter);
               radius = defaultRadius;
               activeTargetMesh = null;
             } else {
-              if (currentBoxHelper) {
-                scene.remove(currentBoxHelper);
-              }
-              currentBoxHelper = new THREE.BoxHelper(wingStrutMesh, 0x00ff00);
-              scene.add(currentBoxHelper);
+              outlinePass.selectedObjects = [wingStrutMesh]; // 翼間支柱の形に沿った輪郭線
 
               var strutBox = new THREE.Box3().setFromObject(wingStrutMesh);
               var strutCenter = strutBox.getCenter(new THREE.Vector3());
