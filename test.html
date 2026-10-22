@@ -67,10 +67,24 @@
     var radius = 30.0;
     var defaultRadius = 30.0;
     
-    var isZoomed = false;
     var currentBoxHelper = null;
-    var wingStrutMesh = null;
-    var panelMesh = null;
+    var activeTargetMesh = null;
+
+    // ▼ 翼間支柱に加えて "propeller"（プロペラ）の検証設定を追加
+    var targetConfigs = [
+      {
+        partKeyword: "wing strut",
+        panelKeyword: "翼間支柱",
+        mesh: null,
+        panel: null
+      },
+      {
+        partKeyword: "propeller",   // GLB内のプロペラパーツ名
+        panelKeyword: "プロペラ",     // GLB内のプロペラパネル名（もしパネル名が異なる場合はここを調整してください）
+        mesh: null,
+        panel: null
+      }
+    ];
 
     var raycaster = new THREE.Raycaster();
     var mouse = new THREE.Vector2();
@@ -246,12 +260,15 @@
 
         model.traverse(function(child) {
           if (child.isMesh) {
-            if (child.name === "wing strut" || child.name.toLowerCase().includes("strut")) {
-              wingStrutMesh = child;
-            }
-            if (child.name === "翼間支柱" || child.name.includes("翼間支柱")) {
-              panelMesh = child;
-            }
+            var cName = child.name.toLowerCase();
+            targetConfigs.forEach(function(config) {
+              if (cName.includes(config.partKeyword.toLowerCase())) {
+                config.mesh = child;
+              }
+              if (cName.includes(config.panelKeyword.toLowerCase())) {
+                config.panel = child;
+              }
+            });
           }
         });
 
@@ -288,37 +305,42 @@
 
         if (intersects.length > 0) {
           var clickedObj = intersects[0].object;
+          var matchedConfig = null;
 
-          if (panelMesh && (clickedObj === panelMesh || isChildOf(clickedObj, panelMesh))) {
-            isZoomed = !isZoomed;
+          for (var i = 0; i < targetConfigs.length; i++) {
+            var cfg = targetConfigs[i];
+            if (cfg.panel && (clickedObj === cfg.panel || isChildOf(clickedObj, cfg.panel))) {
+              matchedConfig = cfg;
+              break;
+            }
+          }
 
-            if (isZoomed && wingStrutMesh) {
-              if (currentBoxHelper) {
-                scene.remove(currentBoxHelper);
-              }
-              currentBoxHelper = new THREE.BoxHelper(wingStrutMesh, 0x00ff00);
-              scene.add(currentBoxHelper);
-
-              var strutBox = new THREE.Box3().setFromObject(wingStrutMesh);
-              var strutCenter = strutBox.getCenter(new THREE.Vector3());
-              var strutSize = strutBox.getSize(new THREE.Vector3()).length();
-
-              targetCenter.copy(strutCenter);
-              
-              // ズームアップの度合い（数値を小さくするとさらにグッと近づきます）
-              radius = strutSize * 1.5;
-
-              if (logBox) logBox.innerHTML = 'Status: 翼間支柱にズームアップ中';
-            } else {
+          if (matchedConfig && matchedConfig.mesh) {
+            if (activeTargetMesh === matchedConfig.mesh) {
               if (currentBoxHelper) {
                 scene.remove(currentBoxHelper);
                 currentBoxHelper = null;
               }
-
               targetCenter.copy(defaultTargetCenter);
               radius = defaultRadius;
-
+              activeTargetMesh = null;
               if (logBox) logBox.innerHTML = 'Status: 全体表示に戻りました';
+            } else {
+              if (currentBoxHelper) {
+                scene.remove(currentBoxHelper);
+              }
+              currentBoxHelper = new THREE.BoxHelper(matchedConfig.mesh, 0x00ff00);
+              scene.add(currentBoxHelper);
+
+              var partBox = new THREE.Box3().setFromObject(matchedConfig.mesh);
+              var partCenter = partBox.getCenter(new THREE.Vector3());
+              var partSize = partBox.getSize(new THREE.Vector3()).length();
+
+              targetCenter.copy(partCenter);
+              radius = partSize * 1.5;
+              activeTargetMesh = matchedConfig.mesh;
+
+              if (logBox) logBox.innerHTML = 'Status: パーツを拡大中';
             }
           }
         }
