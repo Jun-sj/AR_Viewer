@@ -25,17 +25,26 @@
     #btn-start { background-color: #007aff; }
     #btn-stop { background-color: #ff3b30; display: none; }
     
-    /* ▼ 右側に配置する操作パネルのデザイン */
-    #info-panel-right {
-      position: absolute; top: 70px; right: 12px; z-index: 9999;
-      background: rgba(255, 255, 255, 0.9); border: 2px solid #ff9500;
-      color: #333; padding: 14px 18px; border-radius: 10px;
-      cursor: pointer; display: none; max-width: 260px;
-      box-shadow: 0 4px 10px rgba(0,0,0,0.5);
-      transition: background-color 0.3s, border-color 0.3s;
+    /* ▼ 翼間支柱の解説パネル（白いカード型）のデザイン */
+    #card-wing-strut {
+      position: absolute; bottom: 40px; right: 40px; z-index: 9999;
+      background: #ffffff; color: #111827; padding: 16px 20px; border-radius: 16px;
+      cursor: pointer; display: none; width: 260px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+      transition: transform 0.2s, box-shadow 0.2s;
     }
-    #info-panel-right h4 { margin: 0 0 6px 0; font-size: 15px; color: #d97706; }
-    #info-panel-right p { margin: 0; font-size: 12px; color: #555; line-height: 1.4; }
+    #card-wing-strut:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 30px rgba(0,0,0,0.5);
+    }
+    .card-header {
+      background: #e0f2fe; color: #0369a1; font-weight: bold; font-size: 14px;
+      padding: 4px 8px; border-radius: 6px; margin-bottom: 8px; display: inline-block;
+    }
+    #card-wing-strut p { margin: 0; font-size: 12px; color: #4b5563; line-height: 1.5; }
+    #card-wing-strut .action-tip {
+      margin-top: 8px; font-size: 11px; color: #d97706; font-weight: bold;
+    }
 
     #timer-display {
       background: rgba(0,0,0,0.7); color: #fff; padding: 8px 12px;
@@ -62,10 +71,11 @@
     <div id="timer-display">00.0s</div>
   </div>
 
-  <!-- ▼ 右側に配置した操作パネル -->
-  <div id="info-panel-right">
-    <h4>[翼間支柱 (よくかんしゅう)]</h4>
-    <p id="panel-desc">上下の主翼をつなぐ木製の柱です。タップしてハイライトとズームを切替。</p>
+  <!-- ▼ タップ可能な解説パネル（カード） -->
+  <div id="card-wing-strut">
+    <div class="card-header">[翼間支柱(よくかんしゅう)]</div>
+    <p>上下の主翼をつなぐ木製の柱です。飛行中の強い風圧による翼のしなりを防ぎ、全体の頑丈さを保ちます</p>
+    <div id="panel-action" class="action-tip">👉 タップして枠で囲みズーム</div>
   </div>
 
   <script>
@@ -257,7 +267,7 @@
           camera.position.set(0, 0, radius);
         }
 
-        // 翼間支柱パーツの探索
+        // 翼間支柱パーツの探索[cite: 4]
         model.traverse(function(child) {
           if (child.isMesh) {
             if (child.name === "wing strut" || child.name.toLowerCase().includes("strut")) {
@@ -269,7 +279,8 @@
         camera.lookAt(targetCenter);
 
         if (logBox) logBox.innerHTML = 'Status: Model Loaded successfully';
-        document.getElementById('info-panel-right').style.display = 'block';
+        // モデル読み込み完了後に解説パネルを表示
+        document.getElementById('card-wing-strut').style.display = 'block';
 
       }, undefined, function(err) {
         console.error(err);
@@ -292,8 +303,8 @@
       document.getElementById('btn-start').addEventListener('click', onStartClicked);
       document.getElementById('btn-stop').addEventListener('click', onStopClicked);
 
-      // ▼ 右側パネルをタップしたときの処理
-      document.getElementById('info-panel-right').addEventListener('click', function() {
+      // ▼ 白い解説パネルをタップしたときの処理（緑枠で囲む ＆ ズーム切替）
+      document.getElementById('card-wing-strut').addEventListener('click', function() {
         isZoomed = !isZoomed;
 
         if (isZoomed && wingStrutMesh) {
@@ -310,9 +321,8 @@
           targetCenter.copy(strutCenter);
           radius = strutSize * 2.5;
 
-          this.style.borderColor = '#22c55e';
-          this.style.background = 'rgba(240, 253, 244, 0.95)';
-          document.getElementById('panel-desc').innerText = '🔍 枠で囲み中（タップで全体に戻る）';
+          this.style.border = '2px solid #22c55e';
+          document.getElementById('panel-action').innerText = '🔍 拡大表示中（タップで全体に戻る）';
 
         } else {
           if (currentBoxHelper) {
@@ -323,9 +333,8 @@
           targetCenter.copy(defaultTargetCenter);
           radius = defaultRadius;
 
-          this.style.borderColor = '#ff9500';
-          this.style.background = 'rgba(255, 255, 255, 0.9)';
-          document.getElementById('panel-desc').innerText = '上下の主翼をつなぐ木製の柱です。タップしてハイライトとズームを切替。';
+          this.style.border = 'none';
+          document.getElementById('panel-action').innerText = '👉 タップして枠で囲みズーム';
         }
       });
     }
