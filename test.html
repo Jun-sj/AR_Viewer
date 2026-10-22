@@ -63,7 +63,7 @@
     var camera, scene, renderer;
     var targetCenter = new THREE.Vector3(0, 0, 0);
 
-    var radius = 30.0; // 観察距離30m
+    var radius = 30.0; // 観察距離
     var baseHeading = null;
     var baseBeta = null;
 
@@ -75,8 +75,8 @@
     function updateCameraOrbit() {
       if (!camera || !isRecording) return;
 
-      var heading = currentOrientation.alpha; // 水平方位
-      var beta    = currentOrientation.beta;  // 前後傾き（上下）
+      var heading = currentOrientation.alpha;
+      var beta    = currentOrientation.beta;
 
       if (baseHeading === null && heading !== null && !isNaN(heading)) {
         baseHeading = heading;
@@ -88,14 +88,216 @@
       var deltaHeading = heading - (baseHeading || 0);
       var deltaBeta    = beta - (baseBeta || 0);
 
-      // 1. 水平公転角（左右の回り込み）
       var theta = THREE.MathUtils.degToRad(-deltaHeading);
-
-      // 2. 上下公転角（見下ろし・見上げの連動）
       var phiAngle = 90 + deltaBeta;
-      phiAngle = THREE.MathUtils.clamp(phiAngle, 15, 165); // 特異点での反転防止
+      phiAngle = THREE.MathUtils.clamp(phiAngle, 15, 165);
       var phi = THREE.MathUtils.degToRad(phiAngle);
 
-      // 3. 球面座標系によるカメラ座標計算
       camera.position.x = targetCenter.x + radius * Math.sin(phi) * Math.sin(theta);
-      camera.position.y =
+      camera.position.y = targetCenter.y + radius * Math.cos(phi);
+      camera.position.z = targetCenter.z + radius * Math.sin(phi) * Math.cos(theta);
+
+      camera.lookAt(targetCenter);
+    }
+
+    function handleOrientation(e) {
+      var alphaVal = 0;
+      if (typeof e.webkitCompassHeading !== 'undefined' && e.webkitCompassHeading !== null) {
+        alphaVal = e.webkitCompassHeading;
+      } else if (e.alpha !== null && !isNaN(e.alpha)) {
+        alphaVal = e.alpha;
+      }
+
+      currentOrientation.alpha = alphaVal;
+      currentOrientation.beta  = (e.beta  !== null && !isNaN(e.beta))  ? e.beta  : 0;
+      currentOrientation.gamma = (e.gamma !== null && !isNaN(e.gamma)) ? e.gamma : 0;
+    }
+
+    function handleMotion(e) {
+      if (e.rotationRate) {
+        currentMotion.x = (e.rotationRate.beta  !== null && !isNaN(e.rotationRate.beta))  ? e.rotationRate.beta  : 0;
+        currentMotion.y = (e.rotationRate.gamma !== null && !isNaN(e.rotationRate.gamma)) ? e.rotationRate.gamma : 0;
+        currentMotion.z = (e.rotationRate.alpha !== null && !isNaN(e.rotationRate.alpha)) ? e.rotationRate.alpha : 0;
+      }
+    }
+
+    function sendAllLogs() {
+      if (logBuffer.length === 0) return;
+      if (window.FileMaker) {
+        var payload = JSON.stringify({ logs: logBuffer });
+        FileMaker.PerformScript('Save_SensorLogs', payload);
+      }
+      logBuffer = [];
+    }
+
+    function startCameraDirectly() {
+      var video = document.getElementById('camera-video');
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+
+      navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false
+      }).then(function(stream) {
+        video.srcObject = stream;
+        video.play();
+      }).catch(function(err) {
+        if (logBox) logBox.innerHTML = 'Cam Err: ' + err.name;
+      });
+    }
+
+    async function onStartClicked() {
+      startCameraDirectly();
+
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        try { await DeviceOrientationEvent.requestPermission(); } catch(e) {}
+      }
+      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+        try { await DeviceMotionEvent.requestPermission(); } catch(e) {}
+      }
+
+      baseHeading = null;
+      baseBeta = null;
+
+      window.addEventListener('deviceorientation', handleOrientation, true);
+      window.addEventListener('devicemotion', handleMotion, true);
+
+      isRecording = true;
+      startTime = performance.now();
+      logBuffer = [];
+
+      document.getElementById('btn-start').style.display = 'none';
+      document.getElementById('btn-stop').style.display = 'inline-block';
+
+      timerInterval = setInterval(function() {
+        if (!isRecording) return;
+        var elapsed = (performance.now() - startTime) / 1000;
+        document.getElementById('timer-display').innerText = elapsed.toFixed(1) + 's';
+
+        logBuffer.push({
+          time: new Date().toISOString(),
+          elapsed: Number(elapsed.toFixed(2)),
+          alpha: Number(currentOrientation.alpha.toFixed(2)),
+          beta: Number(currentOrientation.beta.toFixed(2)),
+          gamma: Number(currentOrientation.gamma.toFixed(2)),
+          gyroX: Number(currentMotion.x.toFixed(2)),
+          gyroY: Number(currentMotion.y.toFixed(2)),
+          gyroZ: Number(currentMotion.z.toFixed(2))
+        });
+      }, 500);
+    }
+
+    function onStopClicked() {
+      isRecording = false;
+      clearInterval(timerInterval);
+      window.removeEventListener('deviceorientation', handleOrientation);
+      window.removeEventListener('devicemotion', handleMotion);
+
+      sendAllLogs();
+
+      document.getElementById('btn-start').style.display = 'inline-block';
+      document.getElementById('btn-stop').style.display = 'none';
+      if (logBox) {
+        logBox.innerHTML = 'Status: Data Saved to FileMaker';
+      }
+    }
+
+    function init() {
+      var container = document.getElementById('canvas-container');
+      scene = new THREE.Scene();
+
+      camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 5000);
+      camera.position.set(0, 0, radius);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setClearColor(0x000000, 0);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.outputEncoding = THREE.sRGBEncoding;
+      container.appendChild(renderer.domElement);
+
+      var ambLight = new THREE.AmbientLight(0xffffff, 1.8);
+      scene.add(ambLight);
+      var dLight = new THREE.DirectionalLight(0xffffff, 1.4);
+      dLight.position.set(15, 30, 20);
+      scene.add(dLight);
+
+      var loader = new THREE.GLTFLoader();
+      loader.load('./ARtest.glb', function(gltf) {
+        var model = gltf.scene;
+        
+        // モデルの大きさと中心を自動計算して調整
+        var box = new THREE.Box3().setFromObject(model);
+        var center = box.getCenter(new THREE.Vector3());
+        var size = box.getSize(new THREE.Vector3()).length();
+        
+        model.position.sub(center); // 中心を原点に合わせる
+        scene.add(model);
+
+        // モデルのサイズに応じてカメラの距離（radius）を自動調整（見切れ防止）
+        if (size > 0) {
+          radius = size * 1.5;
+          camera.position.set(0, 0, radius);
+        }
+
+        // モデル内から "wing strut" パーツを探索して取得
+        model.traverse(function(child) {
+          if (child.isMesh && child.name === "wing strut") {
+            wingStrutMesh = child;
+            wingStrutMesh.material = wingStrutMesh.material.clone();
+          }
+        });
+
+        camera.lookAt(targetCenter);
+
+        // 読み込み成功ステータスを表示
+        if (logBox) logBox.innerHTML = 'Status: Model Loaded successfully';
+        document.getElementById('btn-highlight-strut').style.display = 'inline-block';
+
+      }, undefined, function(err) {
+        console.error(err);
+        if (logBox) logBox.innerHTML = 'GLB load error: パスやファイル名を確認してください';
+      });
+
+      function animate() {
+        requestAnimationFrame(animate);
+        updateCameraOrbit();
+
+        // 翼間支柱の点滅アニメーション処理
+        if (isFlashing && wingStrutMesh) {
+          var time = Date.now() * 0.008;
+          var intensity = (Math.sin(time) + 1) / 2;
+          wingStrutMesh.material.emissive.setHex(0xff0000);
+          wingStrutMesh.material.emissiveIntensity = intensity * 1.5;
+        }
+
+        renderer.render(scene, camera);
+      }
+      animate();
+
+      window.addEventListener('resize', function() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+      document.getElementById('btn-start').addEventListener('click', onStartClicked);
+      document.getElementById('btn-stop').addEventListener('click', onStopClicked);
+
+      // 翼間支柱ハイライトボタンのクリックイベント
+      document.getElementById('btn-highlight-strut').addEventListener('click', function() {
+        isFlashing = !isFlashing;
+        if (!isFlashing && wingStrutMesh) {
+          wingStrutMesh.material.emissiveIntensity = 0;
+          this.style.backgroundColor = '#ff9500';
+          this.innerText = '翼間支柱をみる';
+        } else {
+          this.style.backgroundColor = '#34c759';
+          this.innerText = 'ハイライト中...';
+        }
+      });
+    }
+
+    window.addEventListener('DOMContentLoaded', init);
+  </script>
+</body>
+</html>
