@@ -12,11 +12,11 @@
     }
     #canvas-container {
       position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
-      z-index: 2;
+      z-index: 2; pointer-events: none;
     }
     #ui-overlay {
       position: absolute; top: 12px; left: 12px; z-index: 9999;
-      display: flex; gap: 8px; align-items: center;
+      display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
     }
     .btn {
       padding: 10px 18px; font-size: 14px; font-weight: bold; border-radius: 6px;
@@ -24,6 +24,7 @@
     }
     #btn-start { background-color: #007aff; }
     #btn-stop { background-color: #ff3b30; display: none; }
+    #btn-highlight-strut { background-color: #ff9500; display: none; }
     #timer-display {
       background: rgba(0,0,0,0.7); color: #fff; padding: 8px 12px;
       border-radius: 6px; font-family: monospace; font-size: 14px;
@@ -33,15 +34,6 @@
       font-size: 12px; color: #00ff66; background: rgba(0, 0, 0, 0.75);
       padding: 10px 14px; border-radius: 6px; z-index: 9999;
       font-family: monospace; line-height: 1.4; pointer-events: none;
-    }
-    #btn-reset-view {
-      position: absolute; bottom: 30px; left: 50%;
-      transform: translateX(-50%);
-      background: rgba(0, 122, 255, 0.9); color: white;
-      padding: 12px 24px; font-size: 15px; font-weight: bold;
-      border: none; border-radius: 24px; display: none;
-      z-index: 9999; cursor: pointer;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
     }
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -55,10 +47,9 @@
   <div id="ui-overlay">
     <button id="btn-start" class="btn">START AR</button>
     <button id="btn-stop" class="btn" style="display:none;">STOP & SAVE</button>
+    <button id="btn-highlight-strut" class="btn">翼間支柱をみる</button>
     <div id="timer-display">00.0s</div>
   </div>
-
-  <button id="btn-reset-view" onclick="resetToOverview()">全体表示に戻る</button>
 
   <script>
     var logBox = document.getElementById('log-box');
@@ -70,341 +61,41 @@
     var currentOrientation = { alpha: 0, beta: 0, gamma: 0 };
     var currentMotion = { x: 0, y: 0, z: 0 };
     var camera, scene, renderer;
-
-    var defaultRadius = 30.0;
     var targetCenter = new THREE.Vector3(0, 0, 0);
-    var targetCenterGoal = new THREE.Vector3(0, 0, 0);
-    var radius = defaultRadius;
-    var radiusGoal = defaultRadius;
-    var isFocusMode = false;
 
+    var radius = 30.0; // 観察距離30m
     var baseHeading = null;
     var baseBeta = null;
 
-    var raycaster = new THREE.Raycaster();
-    var touchPos = new THREE.Vector2();
-    var clickablePanels = [];
+    // 翼間支柱の点滅用変数
+    var wingStrutMesh = null;
+    var isFlashing = false;
 
-    // --- ターゲットハイライト枠（マーカー） ---
-    var highlightMarker = null;
-
-    // パネルと対象パーツ座標の紐付け（ズーム距離を18.0mに統一設定）
-    var partTargets = {
-      left: {
-        name: '複葉機（主翼）',
-        pos: new THREE.Vector3(0.0, 1.2, 0.0),
-        size: [8.5, 1.2, 2.5],
-        dist: 18.0 // 距離を18mに設定
-      },
-      right: {
-        name: '翼間支柱',
-        pos: new THREE.Vector3(3.2, 0.4, 0.0),
-        size: [1.8, 1.8, 1.8],
-        dist: 18.0 // 距離を18mに設定
-      }
-    };
-
-    function createHighlightMarker() {
-      var group = new THREE.Group();
-
-      var geom = new THREE.BoxGeometry(1, 1, 1);
-      var mat = new THREE.MeshBasicMaterial({
-        color: 0x00e5ff,
-        transparent: true,
-        opacity: 0.25,
-        depthWrite: false
-      });
-      var box = new THREE.Mesh(geom, mat);
-      group.add(box);
-
-      var edges = new THREE.EdgesGeometry(geom);
-      var lineMat = new THREE.LineBasicMaterial({
-        color: 0x00ffff,
-        linewidth: 2,
-        transparent: true,
-        opacity: 0.8
-      });
-      var wire = new THREE.LineSegments(edges, lineMat);
-      group.add(wire);
-
-      group.visible = false;
-      scene.add(group);
-      return group;
-    }
-
-    function showMarker(targetDef) {
-      if (!highlightMarker) return;
-      highlightMarker.position.copy(targetDef.pos);
-      highlightMarker.scale.set(targetDef.size[0], targetDef.size[1], targetDef.size[2]);
-      highlightMarker.visible = true;
-    }
-
-    function hideMarker() {
-      if (highlightMarker) highlightMarker.visible = false;
-    }
-
-    // カメラの回り込み追従
+    // 上下・左右の公転連動計算
     function updateCameraOrbit() {
-      if (!camera || !isRecording || isFocusMode) return;
+      if (!camera || !isRecording) return;
 
-      var heading = currentOrientation.alpha;
-      var beta    = currentOrientation.beta;
+      var heading = currentOrientation.alpha; // 水平方位
+      var beta    = currentOrientation.beta;  // 前後傾き（上下）
 
       if (baseHeading === null && heading !== null && !isNaN(heading)) {
         baseHeading = heading;
       }
       if (baseBeta === null && beta !== null && !isNaN(beta)) {
-        baseBeta = baseBeta !== null ? baseBeta : beta;
+        baseBeta = beta;
       }
 
       var deltaHeading = heading - (baseHeading || 0);
       var deltaBeta    = beta - (baseBeta || 0);
 
+      // 1. 水平公転角（左右の回り込み）
       var theta = THREE.MathUtils.degToRad(-deltaHeading);
+
+      // 2. 上下公転角（見下ろし・見上げの連動）
       var phiAngle = 90 + deltaBeta;
-      phiAngle = THREE.MathUtils.clamp(phiAngle, 15, 165);
+      phiAngle = THREE.MathUtils.clamp(phiAngle, 15, 165); // 特異点での反転防止
       var phi = THREE.MathUtils.degToRad(phiAngle);
 
+      // 3. 球面座標系によるカメラ座標計算
       camera.position.x = targetCenter.x + radius * Math.sin(phi) * Math.sin(theta);
-      camera.position.y = targetCenter.y + radius * Math.cos(phi);
-      camera.position.z = targetCenter.z + radius * Math.sin(phi) * Math.cos(theta);
-
-      camera.lookAt(targetCenter);
-    }
-
-    // スムーズな遷移補間
-    function updateTransition() {
-      targetCenter.lerp(targetCenterGoal, 0.08);
-      radius += (radiusGoal - radius) * 0.08;
-
-      if (isFocusMode) {
-        camera.lookAt(targetCenter);
-      }
-
-      if (highlightMarker && highlightMarker.visible) {
-        var pulse = (Math.sin(performance.now() * 0.005) + 1) * 0.5;
-        highlightMarker.children[0].material.opacity = 0.15 + pulse * 0.25;
-      }
-    }
-
-    function resetToOverview() {
-      isFocusMode = false;
-      targetCenterGoal.set(0, 0, 0);
-      radiusGoal = defaultRadius;
-      hideMarker();
-      document.getElementById('btn-reset-view').style.display = 'none';
-      if (logBox) logBox.innerHTML = 'Mode: Orbit Overview (30m)';
-    }
-
-    // パネルタップ判定
-    function onCanvasTouch(e) {
-      if (!renderer || clickablePanels.length === 0) return;
-
-      var clientX = e.clientX || (e.touches && e.touches[0] ? e.touches[0].clientX : null);
-      var clientY = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : null);
-      if (clientX === null || clientY === null) return;
-
-      touchPos.x = (clientX / window.innerWidth) * 2 - 1;
-      touchPos.y = -(clientY / window.innerHeight) * 2 + 1;
-
-      raycaster.setFromCamera(touchPos, camera);
-      var intersects = raycaster.intersectObjects(clickablePanels, true);
-
-      if (intersects.length > 0) {
-        var hit = intersects[0].object;
-        var hitWorldPos = new THREE.Vector3();
-        hit.getWorldPosition(hitWorldPos);
-
-        var targetDef = (hitWorldPos.x < 0) ? partTargets.left : partTargets.right;
-
-        showMarker(targetDef);
-
-        isFocusMode = true;
-        targetCenterGoal.copy(targetDef.pos);
-        radiusGoal = 18.0; // ズーム時のカメラ距離を 18m に指定
-
-        document.getElementById('btn-reset-view').style.display = 'block';
-        if (logBox) {
-          logBox.innerHTML = 'Focus on: ' + targetDef.name + '<br>Dist: 18.0m';
-        }
-      }
-    }
-
-    function handleOrientation(e) {
-      var alphaVal = 0;
-      if (typeof e.webkitCompassHeading !== 'undefined' && e.webkitCompassHeading !== null) {
-        alphaVal = e.webkitCompassHeading;
-      } else if (e.alpha !== null && !isNaN(e.alpha)) {
-        alphaVal = e.alpha;
-      }
-
-      currentOrientation.alpha = alphaVal;
-      currentOrientation.beta  = (e.beta  !== null && !isNaN(e.beta))  ? e.beta  : 0;
-      currentOrientation.gamma = (e.gamma !== null && !isNaN(e.gamma)) ? e.gamma : 0;
-    }
-
-    function handleMotion(e) {
-      if (e.rotationRate) {
-        currentMotion.x = (e.rotationRate.beta  !== null && !isNaN(e.rotationRate.beta))  ? e.rotationRate.beta  : 0;
-        currentMotion.y = (e.rotationRate.gamma !== null && !isNaN(e.rotationRate.gamma)) ? e.rotationRate.gamma : 0;
-        currentMotion.z = (e.rotationRate.alpha !== null && !isNaN(e.rotationRate.alpha)) ? e.rotationRate.alpha : 0;
-      }
-    }
-
-    function sendAllLogs() {
-      if (logBuffer.length === 0) return;
-      if (window.FileMaker) {
-        var payload = JSON.stringify({ logs: logBuffer });
-        FileMaker.PerformScript('Save_SensorLogs', payload);
-      }
-      logBuffer = [];
-    }
-
-    function startCameraDirectly() {
-      var video = document.getElementById('camera-video');
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
-
-      navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' } },
-        audio: false
-      }).then(function(stream) {
-        video.srcObject = stream;
-        video.play();
-        if (logBox) logBox.innerHTML = 'Camera Running';
-      }).catch(function(err) {
-        if (logBox) logBox.innerHTML = 'Cam Err: ' + err.name;
-      });
-    }
-
-    async function onStartClicked() {
-      startCameraDirectly();
-
-      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-        try { await DeviceOrientationEvent.requestPermission(); } catch(e) {}
-      }
-      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-        try { await DeviceMotionEvent.requestPermission(); } catch(e) {}
-      }
-
-      baseHeading = null;
-      baseBeta = null;
-
-      window.addEventListener('deviceorientation', handleOrientation, true);
-      window.addEventListener('devicemotion', handleMotion, true);
-
-      isRecording = true;
-      startTime = performance.now();
-      logBuffer = [];
-
-      document.getElementById('btn-start').style.display = 'none';
-      document.getElementById('btn-stop').style.display = 'inline-block';
-
-      timerInterval = setInterval(function() {
-        if (!isRecording) return;
-        var elapsed = (performance.now() - startTime) / 1000;
-        document.getElementById('timer-display').innerText = elapsed.toFixed(1) + 's';
-
-        if (logBox && !isFocusMode) {
-          logBox.innerHTML = 
-            'Time: ' + elapsed.toFixed(1) + 's<br>' +
-            'Heading: ' + currentOrientation.alpha.toFixed(1) + '<br>' +
-            'Beta: ' + currentOrientation.beta.toFixed(1) + '<br>' +
-            'Gyro X: ' + currentMotion.x.toFixed(2) + '<br>' +
-            'Gyro Z: ' + currentMotion.z.toFixed(2);
-        }
-
-        logBuffer.push({
-          time: new Date().toISOString(),
-          elapsed: Number(elapsed.toFixed(2)),
-          alpha: Number(currentOrientation.alpha.toFixed(2)),
-          beta: Number(currentOrientation.beta.toFixed(2)),
-          gamma: Number(currentOrientation.gamma.toFixed(2)),
-          gyroX: Number(currentMotion.x.toFixed(2)),
-          gyroY: Number(currentMotion.y.toFixed(2)),
-          gyroZ: Number(currentMotion.z.toFixed(2))
-        });
-      }, 500);
-    }
-
-    function onStopClicked() {
-      isRecording = false;
-      clearInterval(timerInterval);
-      window.removeEventListener('deviceorientation', handleOrientation);
-      window.removeEventListener('devicemotion', handleMotion);
-
-      sendAllLogs();
-
-      document.getElementById('btn-start').style.display = 'inline-block';
-      document.getElementById('btn-stop').style.display = 'none';
-      document.getElementById('btn-reset-view').style.display = 'none';
-      hideMarker();
-      if (logBox) {
-        logBox.innerHTML = 'Status: Data Saved to FileMaker';
-      }
-    }
-
-    function init() {
-      var container = document.getElementById('canvas-container');
-      scene = new THREE.Scene();
-
-      camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.5, 2000);
-      camera.position.set(0, 0, radius);
-
-      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-      renderer.setClearColor(0x000000, 0);
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      renderer.setPixelRatio(window.devicePixelRatio);
-      renderer.outputEncoding = THREE.sRGBEncoding;
-      container.appendChild(renderer.domElement);
-
-      var ambLight = new THREE.AmbientLight(0xffffff, 1.8);
-      scene.add(ambLight);
-      var dLight = new THREE.DirectionalLight(0xffffff, 1.4);
-      dLight.position.set(15, 30, 20);
-      scene.add(dLight);
-
-      highlightMarker = createHighlightMarker();
-
-      var loader = new THREE.GLTFLoader();
-      loader.load('./model.glb', function(gltf) {
-        var model = gltf.scene;
-
-        model.traverse(function(child) {
-          if (child.isMesh) {
-            clickablePanels.push(child);
-          }
-        });
-
-        var box = new THREE.Box3().setFromObject(model);
-        var center = box.getCenter(new THREE.Vector3());
-        model.position.sub(center);
-
-        scene.add(model);
-        camera.lookAt(targetCenter);
-      }, undefined, function(err) {
-        if (logBox) logBox.innerHTML = 'GLB load error';
-      });
-
-      function animate() {
-        requestAnimationFrame(animate);
-        updateTransition();
-        updateCameraOrbit();
-        renderer.render(scene, camera);
-      }
-      animate();
-
-      window.addEventListener('resize', function() {
-        camera.aspect = window.innerWidth / window.innerHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(window.innerWidth, window.innerHeight);
-      });
-
-      document.getElementById('btn-start').addEventListener('click', onStartClicked);
-      document.getElementById('btn-stop').addEventListener('click', onStopClicked);
-      renderer.domElement.addEventListener('pointerup', onCanvasTouch);
-    }
-
-    window.addEventListener('DOMContentLoaded', init);
-  </script>
-</body>
-</html>
+      camera.position.y =
