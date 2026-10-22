@@ -26,6 +26,26 @@
     #btn-start { background-color: #007aff; }
     #btn-stop { background-color: #ff3b30; display: none; }
 
+    /* HTMLパネルのデザイン */
+    .info-card {
+      position: absolute; z-index: 9999;
+      background: rgba(255, 255, 255, 0.95); color: #111827;
+      padding: 14px 18px; border-radius: 12px; cursor: pointer;
+      width: 240px; box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+      transition: transform 0.2s, border-color 0.2s;
+    }
+    .info-card:hover { transform: translateY(-2px); }
+    .card-header {
+      font-weight: bold; font-size: 14px; padding: 4px 8px;
+      border-radius: 4px; margin-bottom: 6px; display: inline-block;
+    }
+    .info-card p { margin: 0; font-size: 12px; color: #4b5563; line-height: 1.4; }
+    .action-tip { margin-top: 6px; font-size: 11px; font-weight: bold; color: #d97706; }
+
+    /* 配置位置 */
+    #card-wing-strut { bottom: 30px; right: 30px; display: none; }
+    #card-propeller { top: 70px; right: 30px; display: block; }
+
     #timer-display {
       background: rgba(0,0,0,0.7); color: #fff; padding: 8px 12px;
       border-radius: 6px; font-family: monospace; font-size: 14px;
@@ -43,12 +63,26 @@
 <body>
   <video id="camera-video" autoplay playsinline webkit-playsinline muted></video>
   <div id="canvas-container"></div>
-  <div id="log-box">Status: Ready (3Dパネルをタップできます)</div>
+  <div id="log-box">Status: Ready</div>
 
   <div id="ui-overlay">
     <button id="btn-start" class="btn">START AR</button>
     <button id="btn-stop" class="btn" style="display:none;">STOP & SAVE</button>
     <div id="timer-display">00.0s</div>
+  </div>
+
+  <!-- 翼間支柱用（3D空間内のパネルをタップ） -->
+  <div id="card-wing-strut" class="info-card">
+    <div class="card-header" style="background:#e0f2fe; color:#0369a1;">[翼間支柱]</div>
+    <p>上下の主翼をつなぐ木製の柱です。飛行中のしなりを防ぎます。</p>
+    <div class="action-tip">👉 3Dパネルをタップしてズーム</div>
+  </div>
+
+  <!-- プロペラ用（HTMLパネルをタップ） -->
+  <div id="card-propeller" class="info-card">
+    <div class="card-header" style="background:#fef3c7; color:#d97706;">[プロペラ]</div>
+    <p>エンジンの駆動力を推力に変えるための回転翼です。</p>
+    <div id="prop-action" class="action-tip">👉 このパネルをタップしてズーム</div>
   </div>
 
   <script>
@@ -69,22 +103,9 @@
     
     var currentBoxHelper = null;
     var activeTargetMesh = null;
-
-    // ▼ 翼間支柱に加えて "propeller"（プロペラ）の検証設定を追加
-    var targetConfigs = [
-      {
-        partKeyword: "wing strut",
-        panelKeyword: "翼間支柱",
-        mesh: null,
-        panel: null
-      },
-      {
-        partKeyword: "propeller",   // GLB内のプロペラパーツ名
-        panelKeyword: "プロペラ",     // GLB内のプロペラパネル名（もしパネル名が異なる場合はここを調整してください）
-        mesh: null,
-        panel: null
-      }
-    ];
+    var wingStrutMesh = null;
+    var propellerMesh = null; // GLB内のプロペラメッシュ
+    var panelMesh = null;     // 翼間支柱の3Dパネル
 
     var raycaster = new THREE.Raycaster();
     var mouse = new THREE.Vector2();
@@ -161,7 +182,8 @@
         video.srcObject = stream;
         video.play();
       }).catch(function(err) {
-        if (logBox) logBox.innerHTML = 'Cam Err: ' + err.name;
+        console.warn('Camera warning:', err);
+        if (logBox) logBox.innerHTML = 'Cam Notice: カメラ非対応または拒否';
       });
     }
 
@@ -258,22 +280,25 @@
           camera.position.set(0, 0, radius);
         }
 
+        // GLB内から各パーツおよびパネルを探索して取得[cite: 2, 4]
         model.traverse(function(child) {
           if (child.isMesh) {
             var cName = child.name.toLowerCase();
-            targetConfigs.forEach(function(config) {
-              if (cName.includes(config.partKeyword.toLowerCase())) {
-                config.mesh = child;
-              }
-              if (cName.includes(config.panelKeyword.toLowerCase())) {
-                config.panel = child;
-              }
-            });
+            if (cName === "wing strut" || cName.includes("strut")) {
+              wingStrutMesh = child;
+            }
+            if (cName === "propeller" || cName.includes("propeller")) {
+              propellerMesh = child; // プロペラメッシュを取得
+            }
+            if (child.name === "翼間支柱" || child.name.includes("翼間支柱")) {
+              panelMesh = child;
+            }
           }
         });
 
         camera.lookAt(targetCenter);
         if (logBox) logBox.innerHTML = 'Status: Model Loaded successfully';
+        document.getElementById('card-wing-strut').style.display = 'block';
 
       }, undefined, function(err) {
         console.error(err);
@@ -296,7 +321,48 @@
       document.getElementById('btn-start').addEventListener('click', onStartClicked);
       document.getElementById('btn-stop').addEventListener('click', onStopClicked);
 
+      // ▼ 1. プロペラ用HTMLパネルをタップしたときの処理（GLB内の propeller メッシュを枠で囲んでズーム）
+      document.getElementById('card-propeller').addEventListener('click', function() {
+        if (activeTargetMesh === propellerMesh) {
+          if (currentBoxHelper) {
+            scene.remove(currentBoxHelper);
+            currentBoxHelper = null;
+          }
+          targetCenter.copy(defaultTargetCenter);
+          radius = defaultRadius;
+          activeTargetMesh = null;
+          this.style.border = 'none';
+          document.getElementById('prop-action').innerText = '👉 このパネルをタップしてズーム';
+        } else {
+          if (currentBoxHelper) {
+            scene.remove(currentBoxHelper);
+          }
+          
+          if (propellerMesh) {
+            // プロペラを緑色の枠で囲む
+            currentBoxHelper = new THREE.BoxHelper(propellerMesh, 0x00ff00);
+            scene.add(currentBoxHelper);
+
+            var propBox = new THREE.Box3().setFromObject(propellerMesh);
+            var propCenter = propBox.getCenter(new THREE.Vector3());
+            var propSize = propBox.getSize(new THREE.Vector3()).length();
+
+            targetCenter.copy(propCenter);
+            radius = propSize * 1.5; // ズーム倍率
+            activeTargetMesh = propellerMesh;
+
+            this.style.border = '2px solid #d97706';
+            document.getElementById('prop-action').innerText = '🔍 拡大表示中（タップで戻る）';
+          } else {
+            if (logBox) logBox.innerHTML = 'Status Error: propeller mesh not found';
+          }
+        }
+      });
+
+      // ▼ 2. 3D空間内の翼間支柱パネルをタップしたときの処理
       window.addEventListener('pointerdown', function(event) {
+        if (event.target.closest('.info-card')) return;
+
         mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
         mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
@@ -305,18 +371,9 @@
 
         if (intersects.length > 0) {
           var clickedObj = intersects[0].object;
-          var matchedConfig = null;
 
-          for (var i = 0; i < targetConfigs.length; i++) {
-            var cfg = targetConfigs[i];
-            if (cfg.panel && (clickedObj === cfg.panel || isChildOf(clickedObj, cfg.panel))) {
-              matchedConfig = cfg;
-              break;
-            }
-          }
-
-          if (matchedConfig && matchedConfig.mesh) {
-            if (activeTargetMesh === matchedConfig.mesh) {
+          if (panelMesh && (clickedObj === panelMesh || isChildOf(clickedObj, panelMesh))) {
+            if (activeTargetMesh === wingStrutMesh) {
               if (currentBoxHelper) {
                 scene.remove(currentBoxHelper);
                 currentBoxHelper = null;
@@ -324,23 +381,20 @@
               targetCenter.copy(defaultTargetCenter);
               radius = defaultRadius;
               activeTargetMesh = null;
-              if (logBox) logBox.innerHTML = 'Status: 全体表示に戻りました';
             } else {
               if (currentBoxHelper) {
                 scene.remove(currentBoxHelper);
               }
-              currentBoxHelper = new THREE.BoxHelper(matchedConfig.mesh, 0x00ff00);
+              currentBoxHelper = new THREE.BoxHelper(wingStrutMesh, 0x00ff00);
               scene.add(currentBoxHelper);
 
-              var partBox = new THREE.Box3().setFromObject(matchedConfig.mesh);
-              var partCenter = partBox.getCenter(new THREE.Vector3());
-              var partSize = partBox.getSize(new THREE.Vector3()).length();
+              var strutBox = new THREE.Box3().setFromObject(wingStrutMesh);
+              var strutCenter = strutBox.getCenter(new THREE.Vector3());
+              var strutSize = strutBox.getSize(new THREE.Vector3()).length();
 
-              targetCenter.copy(partCenter);
-              radius = partSize * 1.5;
-              activeTargetMesh = matchedConfig.mesh;
-
-              if (logBox) logBox.innerHTML = 'Status: パーツを拡大中';
+              targetCenter.copy(strutCenter);
+              radius = strutSize * 1.5;
+              activeTargetMesh = wingStrutMesh;
             }
           }
         }
