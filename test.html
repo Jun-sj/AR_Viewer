@@ -25,7 +25,7 @@
     #btn-start { background-color: #007aff; }
     #btn-stop { background-color: #ff3b30; display: none; }
     
-    /* 情報パネルのデザイン */
+    /* 翼間支柱情報パネルのデザイン */
     #info-panel-strut {
       position: absolute; top: 70px; left: 12px; z-index: 9999;
       background: rgba(0, 0, 0, 0.8); border: 2px solid #ff9500;
@@ -79,13 +79,11 @@
     var currentMotion = { x: 0, y: 0, z: 0 };
     var camera, scene, renderer;
     
-    // カメラの視点・ズーム制御用の変数
     var targetCenter = new THREE.Vector3(0, 0, 0);
     var defaultTargetCenter = new THREE.Vector3(0, 0, 0);
     var radius = 30.0;
     var defaultRadius = 30.0;
     
-    // ズーム・フォーカス用のアニメーション管理
     var isZoomed = false;
     var currentBoxHelper = null;
     var wingStrutMesh = null;
@@ -114,7 +112,6 @@
       phiAngle = THREE.MathUtils.clamp(phiAngle, 15, 165);
       var phi = THREE.MathUtils.degToRad(phiAngle);
 
-      // 球面座標系によるカメラ座標計算（targetCenterを中心に公転）
       camera.position.x = targetCenter.x + radius * Math.sin(phi) * Math.sin(theta);
       camera.position.y = targetCenter.y + radius * Math.cos(phi);
       camera.position.z = targetCenter.z + radius * Math.sin(phi) * Math.cos(theta);
@@ -260,10 +257,12 @@
           camera.position.set(0, 0, radius);
         }
 
-        // モデル内から "wing strut" パーツを探索して取得[cite: 4]
+        // モデル内から "wing strut" パーツを部分一致で探索して取得[cite: 4]
         model.traverse(function(child) {
-          if (child.isMesh && child.name === "wing strut") {
-            wingStrutMesh = child;
+          if (child.isMesh) {
+            if (child.name === "wing strut" || child.name.toLowerCase().includes("strut")) {
+              wingStrutMesh = child;
+            }
           }
         });
 
@@ -293,43 +292,38 @@
       document.getElementById('btn-start').addEventListener('click', onStartClicked);
       document.getElementById('btn-stop').addEventListener('click', onStopClicked);
 
-      // ▼ 情報パネルがタップされたときの処理（枠で囲む ＆ ズームイン・アウト切替）
+      // 情報パネルをタップしたときの処理（緑の枠で囲む ＆ ズーム）
       document.getElementById('info-panel-strut').addEventListener('click', function() {
         isZoomed = !isZoomed;
 
         if (isZoomed && wingStrutMesh) {
-          // 1. 翼間支柱を緑色のワイヤーフレーム（BoxHelper）で囲む
           if (currentBoxHelper) {
             scene.remove(currentBoxHelper);
           }
-          currentBoxHelper = new THREE.BoxHelper(wingStrutMesh, 0x00ff00); // 緑色の枠
+          // 翼間支柱の周囲を緑色のワイヤーフレームで囲む
+          currentBoxHelper = new THREE.BoxHelper(wingStrutMesh, 0x00ff00);
           scene.add(currentBoxHelper);
 
-          // 2. 翼間支柱の中心位置を取得し、カメラの注視点をそこに合わせる ＋ ズーム（距離を近づける）
           var strutBox = new THREE.Box3().setFromObject(wingStrutMesh);
           var strutCenter = strutBox.getCenter(new THREE.Vector3());
           var strutSize = strutBox.getSize(new THREE.Vector3()).length();
 
-          targetCenter.copy(strutCenter); // 注視点を翼間支柱に移動
-          radius = strutSize * 2.5;      // カメラをグッと近づける
+          targetCenter.copy(strutCenter);
+          radius = strutSize * 2.5;
 
-          // パネルのデザインをハイライト中に変更
           this.style.borderColor = '#34c759';
           this.style.background = 'rgba(0, 50, 20, 0.85)';
-          document.getElementById('panel-desc').innerText = '🔍 拡大表示中（タップで全体に戻る）';
+          document.getElementById('panel-desc').innerText = '🔍 枠で囲み中（タップで戻る）';
 
         } else {
-          // 枠を削除
           if (currentBoxHelper) {
             scene.remove(currentBoxHelper);
             currentBoxHelper = null;
           }
 
-          // 全体表示（デフォルト）に戻す
           targetCenter.copy(defaultTargetCenter);
           radius = defaultRadius;
 
-          // パネルのデザインを元に戻す
           this.style.borderColor = '#ff9500';
           this.style.background = 'rgba(0, 0, 0, 0.8)';
           document.getElementById('panel-desc').innerText = 'タップして枠で囲みズーム';
