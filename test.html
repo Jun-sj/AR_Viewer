@@ -24,7 +24,19 @@
     }
     #btn-start { background-color: #007aff; }
     #btn-stop { background-color: #ff3b30; display: none; }
-    #btn-highlight-strut { background-color: #ff9500; display: none; }
+    
+    /* ▼ 翼間支柱を操作するパネルのデザイン */
+    #info-panel-strut {
+      position: absolute; top: 70px; left: 12px; z-index: 9999;
+      background: rgba(0, 0, 0, 0.8); border: 2px solid #ff9500;
+      color: #fff; padding: 12px 16px; border-radius: 8px;
+      cursor: pointer; display: none; max-width: 240px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+      transition: background-color 0.3s, border-color 0.3s;
+    }
+    #info-panel-strut h4 { margin: 0 0 4px 0; font-size: 15px; color: #ff9500; }
+    #info-panel-strut p { margin: 0; font-size: 12px; color: #ccc; }
+
     #timer-display {
       background: rgba(0,0,0,0.7); color: #fff; padding: 8px 12px;
       border-radius: 6px; font-family: monospace; font-size: 14px;
@@ -47,8 +59,13 @@
   <div id="ui-overlay">
     <button id="btn-start" class="btn">START AR</button>
     <button id="btn-stop" class="btn" style="display:none;">STOP & SAVE</button>
-    <button id="btn-highlight-strut" class="btn">翼間支柱をみる</button>
     <div id="timer-display">00.0s</div>
+  </div>
+
+  <!-- ▼ タップ用の情報パネル -->
+  <div id="info-panel-strut">
+    <h4 id="panel-title">翼間支柱 (Wing Strut)</h4>
+    <p id="panel-desc">タップしてハイライト表示を切り替え</p>
   </div>
 
   <script>
@@ -63,7 +80,7 @@
     var camera, scene, renderer;
     var targetCenter = new THREE.Vector3(0, 0, 0);
 
-    var radius = 30.0; // 観察距離
+    var radius = 30.0;
     var baseHeading = null;
     var baseBeta = null;
 
@@ -71,7 +88,6 @@
     var wingStrutMesh = null;
     var isFlashing = false;
 
-    // 上下・左右の公転連動計算
     function updateCameraOrbit() {
       if (!camera || !isRecording) return;
 
@@ -225,21 +241,19 @@
       loader.load('./ARtest.glb', function(gltf) {
         var model = gltf.scene;
         
-        // モデルの大きさと中心を自動計算して調整
         var box = new THREE.Box3().setFromObject(model);
         var center = box.getCenter(new THREE.Vector3());
         var size = box.getSize(new THREE.Vector3()).length();
         
-        model.position.sub(center); // 中心を原点に合わせる
+        model.position.sub(center);
         scene.add(model);
 
-        // モデルのサイズに応じてカメラの距離（radius）を自動調整（見切れ防止）
         if (size > 0) {
           radius = size * 1.5;
           camera.position.set(0, 0, radius);
         }
 
-        // モデル内から "wing strut" パーツを探索して取得
+        // モデル内から "wing strut" パーツを探索して取得[cite: 4]
         model.traverse(function(child) {
           if (child.isMesh && child.name === "wing strut") {
             wingStrutMesh = child;
@@ -249,20 +263,20 @@
 
         camera.lookAt(targetCenter);
 
-        // 読み込み成功ステータスを表示
         if (logBox) logBox.innerHTML = 'Status: Model Loaded successfully';
-        document.getElementById('btn-highlight-strut').style.display = 'inline-block';
+        // モデル読み込み完了後に情報パネルを表示
+        document.getElementById('info-panel-strut').style.display = 'block';
 
       }, undefined, function(err) {
         console.error(err);
-        if (logBox) logBox.innerHTML = 'GLB load error: パスやファイル名を確認してください';
+        if (logBox) logBox.innerHTML = 'GLB load error';
       });
 
       function animate() {
         requestAnimationFrame(animate);
         updateCameraOrbit();
 
-        // 翼間支柱の点滅アニメーション処理
+        // 翼間支柱の点滅アニメーション処理[cite: 4]
         if (isFlashing && wingStrutMesh) {
           var time = Date.now() * 0.008;
           var intensity = (Math.sin(time) + 1) / 2;
@@ -283,16 +297,18 @@
       document.getElementById('btn-start').addEventListener('click', onStartClicked);
       document.getElementById('btn-stop').addEventListener('click', onStopClicked);
 
-      // 翼間支柱ハイライトボタンのクリックイベント
-      document.getElementById('btn-highlight-strut').addEventListener('click', function() {
+      // ▼ 情報パネルがタップされたときの処理（ハイライトのON/OFF切替）
+      document.getElementById('info-panel-strut').addEventListener('click', function() {
         isFlashing = !isFlashing;
         if (!isFlashing && wingStrutMesh) {
           wingStrutMesh.material.emissiveIntensity = 0;
-          this.style.backgroundColor = '#ff9500';
-          this.innerText = '翼間支柱をみる';
+          this.style.borderColor = '#ff9500';
+          this.style.background = 'rgba(0, 0, 0, 0.8)';
+          document.getElementById('panel-desc').innerText = 'タップしてハイライト表示を切り替え';
         } else {
-          this.style.backgroundColor = '#34c759';
-          this.innerText = 'ハイライト中...';
+          this.style.borderColor = '#34c759';
+          this.style.background = 'rgba(0, 50, 20, 0.85)';
+          document.getElementById('panel-desc').innerText = '⚡ ハイライト点滅中...';
         }
       });
     }
