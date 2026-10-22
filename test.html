@@ -12,7 +12,7 @@
     }
     #canvas-container {
       position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
-      z-index: 2; pointer-events: auto; /* 3D空間のタップを受け付けるためautoに設定 */
+      z-index: 2; pointer-events: auto;
     }
     #ui-overlay {
       position: absolute; top: 12px; left: 12px; z-index: 9999;
@@ -70,7 +70,7 @@
     var isZoomed = false;
     var currentBoxHelper = null;
     var wingStrutMesh = null;
-    var panelMesh = null; // 3D空間内の解説パネル
+    var panelMesh = null;
 
     var raycaster = new THREE.Raycaster();
     var mouse = new THREE.Vector2();
@@ -244,7 +244,6 @@
           camera.position.set(0, 0, radius);
         }
 
-        // GLB内から "wing strut" と "翼間支柱"（パネル）を探索して取得[cite: 4]
         model.traverse(function(child) {
           if (child.isMesh) {
             if (child.name === "wing strut" || child.name.toLowerCase().includes("strut")) {
@@ -280,7 +279,6 @@
       document.getElementById('btn-start').addEventListener('click', onStartClicked);
       document.getElementById('btn-stop').addEventListener('click', onStopClicked);
 
-      // ▼ 3D空間内のパネルをタップ（クリック）したときの判定処理
       window.addEventListener('pointerdown', function(event) {
         mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
         mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
@@ -291,7 +289,6 @@
         if (intersects.length > 0) {
           var clickedObj = intersects[0].object;
 
-          // タップされたオブジェクトがGLB内の「翼間支柱」パネル（またはその一部）であるか判定
           if (panelMesh && (clickedObj === panelMesh || isChildOf(clickedObj, panelMesh))) {
             isZoomed = !isZoomed;
 
@@ -299,7 +296,6 @@
               if (currentBoxHelper) {
                 scene.remove(currentBoxHelper);
               }
-              // 翼間支柱を緑色の枠で囲む
               currentBoxHelper = new THREE.BoxHelper(wingStrutMesh, 0x00ff00);
               scene.add(currentBoxHelper);
 
@@ -308,9 +304,11 @@
               var strutSize = strutBox.getSize(new THREE.Vector3()).length();
 
               targetCenter.copy(strutCenter);
-              radius = strutSize * 2.5;
+              
+              // ズームアップの度合い（数値を小さくするとさらにグッと近づきます）
+              radius = strutSize * 1.5;
 
-              if (logBox) logBox.innerHTML = 'Status: 翼間支柱を拡大中';
+              if (logBox) logBox.innerHTML = 'Status: 翼間支柱にズームアップ中';
             } else {
               if (currentBoxHelper) {
                 scene.remove(currentBoxHelper);
