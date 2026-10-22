@@ -12,39 +12,19 @@
     }
     #canvas-container {
       position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
-      z-index: 2; pointer-events: none;
+      z-index: 2; pointer-events: auto; /* 3D空間のタップを受け付けるためautoに設定 */
     }
     #ui-overlay {
       position: absolute; top: 12px; left: 12px; z-index: 9999;
       display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+      pointer-events: none;
     }
     .btn {
       padding: 10px 18px; font-size: 14px; font-weight: bold; border-radius: 6px;
-      border: none; cursor: pointer; color: white;
+      border: none; cursor: pointer; color: white; pointer-events: auto;
     }
     #btn-start { background-color: #007aff; }
     #btn-stop { background-color: #ff3b30; display: none; }
-    
-    /* ▼ 翼間支柱の解説パネル（白いカード型）のデザイン */
-    #card-wing-strut {
-      position: absolute; bottom: 40px; right: 40px; z-index: 9999;
-      background: #ffffff; color: #111827; padding: 16px 20px; border-radius: 16px;
-      cursor: pointer; display: none; width: 260px;
-      box-shadow: 0 10px 25px rgba(0,0,0,0.4);
-      transition: transform 0.2s, box-shadow 0.2s;
-    }
-    #card-wing-strut:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 12px 30px rgba(0,0,0,0.5);
-    }
-    .card-header {
-      background: #e0f2fe; color: #0369a1; font-weight: bold; font-size: 14px;
-      padding: 4px 8px; border-radius: 6px; margin-bottom: 8px; display: inline-block;
-    }
-    #card-wing-strut p { margin: 0; font-size: 12px; color: #4b5563; line-height: 1.5; }
-    #card-wing-strut .action-tip {
-      margin-top: 8px; font-size: 11px; color: #d97706; font-weight: bold;
-    }
 
     #timer-display {
       background: rgba(0,0,0,0.7); color: #fff; padding: 8px 12px;
@@ -63,19 +43,12 @@
 <body>
   <video id="camera-video" autoplay playsinline webkit-playsinline muted></video>
   <div id="canvas-container"></div>
-  <div id="log-box">Status: Ready</div>
+  <div id="log-box">Status: Ready (3Dパネルをタップできます)</div>
 
   <div id="ui-overlay">
     <button id="btn-start" class="btn">START AR</button>
     <button id="btn-stop" class="btn" style="display:none;">STOP & SAVE</button>
     <div id="timer-display">00.0s</div>
-  </div>
-
-  <!-- ▼ タップ可能な解説パネル（カード） -->
-  <div id="card-wing-strut">
-    <div class="card-header">[翼間支柱(よくかんしゅう)]</div>
-    <p>上下の主翼をつなぐ木製の柱です。飛行中の強い風圧による翼のしなりを防ぎ、全体の頑丈さを保ちます</p>
-    <div id="panel-action" class="action-tip">👉 タップして枠で囲みズーム</div>
   </div>
 
   <script>
@@ -97,6 +70,10 @@
     var isZoomed = false;
     var currentBoxHelper = null;
     var wingStrutMesh = null;
+    var panelMesh = null; // 3D空間内の解説パネル
+
+    var raycaster = new THREE.Raycaster();
+    var mouse = new THREE.Vector2();
 
     var baseHeading = null;
     var baseBeta = null;
@@ -267,20 +244,20 @@
           camera.position.set(0, 0, radius);
         }
 
-        // 翼間支柱パーツの探索[cite: 4]
+        // GLB内から "wing strut" と "翼間支柱"（パネル）を探索して取得[cite: 4]
         model.traverse(function(child) {
           if (child.isMesh) {
             if (child.name === "wing strut" || child.name.toLowerCase().includes("strut")) {
               wingStrutMesh = child;
             }
+            if (child.name === "翼間支柱" || child.name.includes("翼間支柱")) {
+              panelMesh = child;
+            }
           }
         });
 
         camera.lookAt(targetCenter);
-
         if (logBox) logBox.innerHTML = 'Status: Model Loaded successfully';
-        // モデル読み込み完了後に解説パネルを表示
-        document.getElementById('card-wing-strut').style.display = 'block';
 
       }, undefined, function(err) {
         console.error(err);
@@ -303,40 +280,60 @@
       document.getElementById('btn-start').addEventListener('click', onStartClicked);
       document.getElementById('btn-stop').addEventListener('click', onStopClicked);
 
-      // ▼ 白い解説パネルをタップしたときの処理（緑枠で囲む ＆ ズーム切替）
-      document.getElementById('card-wing-strut').addEventListener('click', function() {
-        isZoomed = !isZoomed;
+      // ▼ 3D空間内のパネルをタップ（クリック）したときの判定処理
+      window.addEventListener('pointerdown', function(event) {
+        mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+        mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
-        if (isZoomed && wingStrutMesh) {
-          if (currentBoxHelper) {
-            scene.remove(currentBoxHelper);
+        raycaster.setFromCamera(mouse, camera);
+        var intersects = raycaster.intersectObjects(scene.children, true);
+
+        if (intersects.length > 0) {
+          var clickedObj = intersects[0].object;
+
+          // タップされたオブジェクトがGLB内の「翼間支柱」パネル（またはその一部）であるか判定
+          if (panelMesh && (clickedObj === panelMesh || isChildOf(clickedObj, panelMesh))) {
+            isZoomed = !isZoomed;
+
+            if (isZoomed && wingStrutMesh) {
+              if (currentBoxHelper) {
+                scene.remove(currentBoxHelper);
+              }
+              // 翼間支柱を緑色の枠で囲む
+              currentBoxHelper = new THREE.BoxHelper(wingStrutMesh, 0x00ff00);
+              scene.add(currentBoxHelper);
+
+              var strutBox = new THREE.Box3().setFromObject(wingStrutMesh);
+              var strutCenter = strutBox.getCenter(new THREE.Vector3());
+              var strutSize = strutBox.getSize(new THREE.Vector3()).length();
+
+              targetCenter.copy(strutCenter);
+              radius = strutSize * 2.5;
+
+              if (logBox) logBox.innerHTML = 'Status: 翼間支柱を拡大中';
+            } else {
+              if (currentBoxHelper) {
+                scene.remove(currentBoxHelper);
+                currentBoxHelper = null;
+              }
+
+              targetCenter.copy(defaultTargetCenter);
+              radius = defaultRadius;
+
+              if (logBox) logBox.innerHTML = 'Status: 全体表示に戻りました';
+            }
           }
-          currentBoxHelper = new THREE.BoxHelper(wingStrutMesh, 0x00ff00);
-          scene.add(currentBoxHelper);
-
-          var strutBox = new THREE.Box3().setFromObject(wingStrutMesh);
-          var strutCenter = strutBox.getCenter(new THREE.Vector3());
-          var strutSize = strutBox.getSize(new THREE.Vector3()).length();
-
-          targetCenter.copy(strutCenter);
-          radius = strutSize * 2.5;
-
-          this.style.border = '2px solid #22c55e';
-          document.getElementById('panel-action').innerText = '🔍 拡大表示中（タップで全体に戻る）';
-
-        } else {
-          if (currentBoxHelper) {
-            scene.remove(currentBoxHelper);
-            currentBoxHelper = null;
-          }
-
-          targetCenter.copy(defaultTargetCenter);
-          radius = defaultRadius;
-
-          this.style.border = 'none';
-          document.getElementById('panel-action').innerText = '👉 タップして枠で囲みズーム';
         }
       });
+
+      function isChildOf(child, parent) {
+        var node = child;
+        while (node) {
+          if (node === parent) return true;
+          node = node.parent;
+        }
+        return false;
+      }
     }
 
     window.addEventListener('DOMContentLoaded', init);
