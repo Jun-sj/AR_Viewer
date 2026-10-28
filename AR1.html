@@ -44,8 +44,8 @@
   <div id="log-box">Status: Ready</div>
 
   <div id="ui-overlay">
-    <button id="btn-start" class="btn">START AR</button>
-    <button id="btn-stop" class="btn" style="display:none;">STOP & SAVE</button>
+    <button id="btn-start" class="btn">開始</button>
+    <button id="btn-stop" class="btn" style="display:none;">終了</button>
     <div id="timer-display">00.0s</div>
   </div>
 
@@ -62,35 +62,24 @@
     var targetCenter = new THREE.Vector3(0, 0, 0);
 
     var radius = 30.0; // 観察距離30m
-    var baseHeading = null;
-    var baseBeta = null;
 
-    // 上下・左右の公転連動計算
+    var baseHeading = null;
+
+    // ★ 上下を無くし、水平方向（左右）の回転のみに絞った公転計算
     function updateCameraOrbit() {
       if (!camera || !isRecording) return;
+      if (baseHeading === null) return; // 基準が取れるまでは待機
 
-      var heading = currentOrientation.alpha; // 水平方位
-      var beta    = currentOrientation.beta;  // 前後傾き（上下）
+      var heading = currentOrientation.alpha;
+      var deltaHeading = heading - baseHeading;
 
-      if (baseHeading === null && heading !== null && !isNaN(heading)) {
-        baseHeading = heading;
-      }
-      if (baseBeta === null && beta !== null && !isNaN(beta)) {
-        baseBeta = beta;
-      }
-
-      var deltaHeading = heading - (baseHeading || 0);
-      var deltaBeta    = beta - (baseBeta || 0);
-
-      // 1. 水平公転角（左右の回り込み）
+      // 1. 水平公転角のみ計算
       var theta = THREE.MathUtils.degToRad(-deltaHeading);
 
-      // 2. 上下公転角（見下ろし・見上げの連動）
-      var phiAngle = 90 + deltaBeta;
-      phiAngle = THREE.MathUtils.clamp(phiAngle, 15, 165); // 特異点での反転防止
-      var phi = THREE.MathUtils.degToRad(phiAngle);
+      // 2. 上下の角度（phi）は常に水平（90度）に固定
+      var phi = THREE.MathUtils.degToRad(90);
 
-      // 3. 球面座標系によるカメラ座標計算
+      // 3. 球面座標系によるカメラ座標計算（高さは常に一定）
       camera.position.x = targetCenter.x + radius * Math.sin(phi) * Math.sin(theta);
       camera.position.y = targetCenter.y + radius * Math.cos(phi);
       camera.position.z = targetCenter.z + radius * Math.sin(phi) * Math.cos(theta);
@@ -109,6 +98,11 @@
       currentOrientation.alpha = alphaVal;
       currentOrientation.beta  = (e.beta  !== null && !isNaN(e.beta))  ? e.beta  : 0;
       currentOrientation.gamma = (e.gamma !== null && !isNaN(e.gamma)) ? e.gamma : 0;
+
+      // ★ 実際にセンサーから値が届いた最初のタイミングで水平基準を安全にロックする
+      if (isRecording && baseHeading === null) {
+        baseHeading = alphaVal;
+      }
     }
 
     function handleMotion(e) {
@@ -161,8 +155,8 @@
         } catch(e) {}
       }
 
+      // 記録開始時にベースをリセットして再取得待ちにする
       baseHeading = null;
-      baseBeta = null;
 
       window.addEventListener('deviceorientation', handleOrientation, true);
       window.addEventListener('devicemotion', handleMotion, true);
