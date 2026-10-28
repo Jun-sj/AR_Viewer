@@ -63,38 +63,26 @@
 
     var radius = 30.0; // 観察距離30m
 
-    // ボタンを押した瞬間の向きを基準（正面）にするための変数
     var baseHeading = null;
     var baseBeta = null;
 
-    // 上下・左右の公転連動計算（スタート時の向きを正面として相対計算）
+    // 上下・左右の公転連動計算
     function updateCameraOrbit() {
       if (!camera || !isRecording) return;
+      if (baseHeading === null || baseBeta === null) return; // 基準が取れるまでは待機
 
-      var heading = currentOrientation.alpha; // 水平方位
-      var beta    = currentOrientation.beta;  // 前後傾き（上下）
+      var heading = currentOrientation.alpha;
+      var beta    = currentOrientation.beta;
 
-      if (heading === null || isNaN(heading)) heading = 0;
-      if (beta === null || isNaN(beta)) beta = 0;
-
-      // ★START ARを押した瞬間の向きを初めての基準（base）としてロックする
-      if (baseHeading === null) {
-        baseHeading = heading;
-      }
-      if (baseBeta === null) {
-        baseBeta = beta;
-      }
-
-      // 基準からの差分（どれくらいスマホを動かしたか）を計算
       var deltaHeading = heading - baseHeading;
       var deltaBeta    = beta - baseBeta;
 
-      // 1. 水平公転角（押した瞬間が正面 θ = 0 になる）
+      // 1. 水平公転角
       var theta = THREE.MathUtils.degToRad(-deltaHeading);
 
-      // 2. 上下公転角（見下ろし・見上げの連動）
+      // 2. 上下公転角
       var phiAngle = 90 + deltaBeta;
-      phiAngle = THREE.MathUtils.clamp(phiAngle, 15, 165); // 特異点での反転防止
+      phiAngle = THREE.MathUtils.clamp(phiAngle, 15, 165);
       var phi = THREE.MathUtils.degToRad(phiAngle);
 
       // 3. 球面座標系によるカメラ座標計算
@@ -116,6 +104,12 @@
       currentOrientation.alpha = alphaVal;
       currentOrientation.beta  = (e.beta  !== null && !isNaN(e.beta))  ? e.beta  : 0;
       currentOrientation.gamma = (e.gamma !== null && !isNaN(e.gamma)) ? e.gamma : 0;
+
+      // ★ 実際にセンサーから値が届いた最初のタイミングで基準を安全にロックする
+      if (isRecording && baseHeading === null) {
+        baseHeading = alphaVal;
+        baseBeta = currentOrientation.beta;
+      }
     }
 
     function handleMotion(e) {
@@ -168,7 +162,7 @@
         } catch(e) {}
       }
 
-      // ★ボタンを押した瞬間に基準をリセットし、この瞬間の向きを「正面」として再取得させる
+      // 記録開始時にベースをリセットして再取得待ちにする
       baseHeading = null;
       baseBeta = null;
 
