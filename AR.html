@@ -61,35 +61,34 @@
     var camera, scene, renderer;
     var targetCenter = new THREE.Vector3(0, 0, 0);
 
-    var radius = 30.0;
-    var baseHeading = null;
-    var baseBeta = null;
+    var radius = 30.0; // 観察距離30m
+    
+    // スマホの向きによるズレを防ぐため、基準方位を固定（または初期化用オフセット）
+    var fixedHeadingOffset = 0; 
 
-    // カメラ位置を端末の向きに合わせて機体の周囲に配置
+    // 上下・左右の公転連動計算（常に一定の正面を基準にする修正版）
     function updateCameraOrbit() {
       if (!camera || !isRecording) return;
 
-      var heading = currentOrientation.alpha; // 方位角
-      var beta    = currentOrientation.beta;  // 前後傾き
+      var heading = currentOrientation.alpha; // 水平方位
+      var beta    = currentOrientation.beta;  // 前後傾き（上下）
 
-      if (baseHeading === null && heading !== null && !isNaN(heading)) {
-        baseHeading = heading;
-      }
-      if (baseBeta === null && beta !== null && !isNaN(beta)) {
-        baseBeta = beta;
-      }
+      if (heading === null || isNaN(heading)) heading = 0;
+      if (beta === null || isNaN(beta)) beta = 0;
 
-      var deltaHeading = (heading - (baseHeading || 0));
-      var deltaBeta    = (beta - (baseBeta || 0));
+      // ボタンを押した瞬間の向きに依存せず、常に一定の基準から計算する
+      var deltaHeading = heading;
+      var deltaBeta    = beta;
 
-      // iPadを持って右に回ったら、カメラも機体の右側へ公転
-      var theta = THREE.MathUtils.degToRad(-deltaHeading);
+      // 1. 水平公転角（常に一定の正面から始まるように固定）
+      var theta = THREE.MathUtils.degToRad(-deltaHeading + fixedHeadingOffset);
 
-      // 上下見下ろし（基準90度からiPadの傾き変化分を反映）
-      var phiAngle = 90 - deltaBeta;
-      phiAngle = THREE.MathUtils.clamp(phiAngle, 30, 150);
+      // 2. 上下公転角（見下ろし・見上げの連動）
+      var phiAngle = 90 + deltaBeta;
+      phiAngle = THREE.MathUtils.clamp(phiAngle, 15, 165); // 特異点での反転防止
       var phi = THREE.MathUtils.degToRad(phiAngle);
 
+      // 3. 球面座標系によるカメラ座標計算
       camera.position.x = targetCenter.x + radius * Math.sin(phi) * Math.sin(theta);
       camera.position.y = targetCenter.y + radius * Math.cos(phi);
       camera.position.z = targetCenter.z + radius * Math.sin(phi) * Math.cos(theta);
@@ -98,7 +97,6 @@
     }
 
     function handleOrientation(e) {
-      // iOS では webkitCompassHeading がコンパス方位として正確に取れる場合がある
       var alphaVal = 0;
       if (typeof e.webkitCompassHeading !== 'undefined' && e.webkitCompassHeading !== null) {
         alphaVal = e.webkitCompassHeading;
@@ -138,21 +136,20 @@
       }).then(function(stream) {
         video.srcObject = stream;
         video.play();
+        if (logBox) logBox.innerHTML = 'Camera Running';
       }).catch(function(err) {
         if (logBox) logBox.innerHTML = 'Cam Err: ' + err.name;
       });
     }
 
     async function onStartClicked() {
-      // 1. 直ちにカメラ起動
       startCameraDirectly();
 
-      // 2. iOS センサー権限を同期的に許可取得
       if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
         try {
           var oriPerm = await DeviceOrientationEvent.requestPermission();
-          if (oriPerm !== 'granted') {
-            if (logBox) logBox.innerHTML = 'Orientation permission denied';
+          if (oriPerm !== 'granted' && logBox) {
+            logBox.innerHTML = 'Orientation permission denied';
           }
         } catch(e) {}
       }
@@ -161,10 +158,6 @@
           await DeviceMotionEvent.requestPermission();
         } catch(e) {}
       }
-
-      // 3. 基準角度リセット
-      baseHeading = null;
-      baseBeta = null;
 
       window.addEventListener('deviceorientation', handleOrientation, true);
       window.addEventListener('devicemotion', handleMotion, true);
@@ -239,7 +232,7 @@
       scene.add(dLight);
 
       var loader = new THREE.GLTFLoader();
-      loader.load('./model.glb', function(gltf) {
+      loader.load('./model1.glb', function(gltf) {
         var model = gltf.scene;
         var box = new THREE.Box3().setFromObject(model);
         var center = box.getCenter(new THREE.Vector3());
@@ -251,7 +244,6 @@
         if (logBox) logBox.innerHTML = 'GLB load error';
       });
 
-      // 毎フレーム updateCameraOrbit を呼んでスムーズに連動させる
       function animate() {
         requestAnimationFrame(animate);
         updateCameraOrbit();
