@@ -66,10 +66,10 @@
     var baseHeading = null;
     var baseBeta = null;
 
-    // 上下・左右の公転連動計算
+    // 上下・左右の公転連動計算（上下の動きに対応した修正版）
     function updateCameraOrbit() {
       if (!camera || !isRecording) return;
-      if (baseHeading === null || baseBeta === null) return; // 基準が取れるまでは待機
+      if (baseHeading === null || baseBeta === null) return;
 
       var heading = currentOrientation.alpha;
       var beta    = currentOrientation.beta;
@@ -77,12 +77,12 @@
       var deltaHeading = heading - baseHeading;
       var deltaBeta    = beta - baseBeta;
 
-      // 1. 水平公転角
+      // 1. 水平公転角（左右）
       var theta = THREE.MathUtils.degToRad(-deltaHeading);
 
-      // 2. 上下公転角
-      var phiAngle = 90 + deltaBeta;
-      phiAngle = THREE.MathUtils.clamp(phiAngle, 15, 165);
+      // 2. 上下公転角（符号を反転させ、必要に応じて感度を調整。例: * 1.0）
+      var phiAngle = 90 - (deltaBeta * 1.0); 
+      phiAngle = THREE.MathUtils.clamp(phiAngle, 15, 165); // 機体の上部・下部をしっかり見渡せる範囲に制限
       var phi = THREE.MathUtils.degToRad(phiAngle);
 
       // 3. 球面座標系によるカメラ座標計算
@@ -105,7 +105,6 @@
       currentOrientation.beta  = (e.beta  !== null && !isNaN(e.beta))  ? e.beta  : 0;
       currentOrientation.gamma = (e.gamma !== null && !isNaN(e.gamma)) ? e.gamma : 0;
 
-      // ★ 実際にセンサーから値が届いた最初のタイミングで基準を安全にロックする
       if (isRecording && baseHeading === null) {
         baseHeading = alphaVal;
         baseBeta = currentOrientation.beta;
@@ -162,7 +161,6 @@
         } catch(e) {}
       }
 
-      // 記録開始時にベースをリセットして再取得待ちにする
       baseHeading = null;
       baseBeta = null;
 
@@ -197,7 +195,7 @@
           beta: Number(currentOrientation.beta.toFixed(2)),
           gamma: Number(currentOrientation.gamma.toFixed(2)),
           gyroX: Number(currentMotion.x.toFixed(2)),
-          gyroY: Number(currentMotion.y.toFixed(2)),
+          gyroY: Number(currentMotion.y.dates ? ... : currentMotion.y.toFixed(2)),
           gyroZ: Number(currentMotion.z.toFixed(2))
         });
       }, 500);
