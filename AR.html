@@ -62,11 +62,12 @@
     var targetCenter = new THREE.Vector3(0, 0, 0);
 
     var radius = 30.0; // 観察距離30m
-    
-    // スマホの向きによるズレを防ぐため、基準方位を固定（または初期化用オフセット）
-    var fixedHeadingOffset = 0; 
 
-    // 上下・左右の公転連動計算（常に一定の正面を基準にする修正版）
+    // ボタンを押した瞬間の向きを基準（正面）にするための変数
+    var baseHeading = null;
+    var baseBeta = null;
+
+    // 上下・左右の公転連動計算（スタート時の向きを正面として相対計算）
     function updateCameraOrbit() {
       if (!camera || !isRecording) return;
 
@@ -76,12 +77,20 @@
       if (heading === null || isNaN(heading)) heading = 0;
       if (beta === null || isNaN(beta)) beta = 0;
 
-      // ボタンを押した瞬間の向きに依存せず、常に一定の基準から計算する
-      var deltaHeading = heading;
-      var deltaBeta    = beta;
+      // ★START ARを押した瞬間の向きを初めての基準（base）としてロックする
+      if (baseHeading === null) {
+        baseHeading = heading;
+      }
+      if (baseBeta === null) {
+        baseBeta = beta;
+      }
 
-      // 1. 水平公転角（常に一定の正面から始まるように固定）
-      var theta = THREE.MathUtils.degToRad(-deltaHeading + fixedHeadingOffset);
+      // 基準からの差分（どれくらいスマホを動かしたか）を計算
+      var deltaHeading = heading - baseHeading;
+      var deltaBeta    = beta - baseBeta;
+
+      // 1. 水平公転角（押した瞬間が正面 θ = 0 になる）
+      var theta = THREE.MathUtils.degToRad(-deltaHeading);
 
       // 2. 上下公転角（見下ろし・見上げの連動）
       var phiAngle = 90 + deltaBeta;
@@ -158,6 +167,10 @@
           await DeviceMotionEvent.requestPermission();
         } catch(e) {}
       }
+
+      // ★ボタンを押した瞬間に基準をリセットし、この瞬間の向きを「正面」として再取得させる
+      baseHeading = null;
+      baseBeta = null;
 
       window.addEventListener('deviceorientation', handleOrientation, true);
       window.addEventListener('devicemotion', handleMotion, true);
